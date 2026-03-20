@@ -143,6 +143,56 @@ async function fetchJobThoughts(supabase: SupabaseClient) {
   return combined;
 }
 
+// --- Resume/Cover Letter file detection ---
+const RESUME_BASE_DIR = `${Deno.env.get("HOME")}/Library/CloudStorage/Dropbox/Resume/2026 Resume - Claude`;
+
+async function findResumeFiles(companyName: string): Promise<{ resumePath: string | null; coverLetterPath: string | null }> {
+  let resumePath: string | null = null;
+  let coverLetterPath: string | null = null;
+
+  // Try to find a matching company folder (case-insensitive, partial match)
+  try {
+    const entries: string[] = [];
+    for await (const entry of Deno.readDir(RESUME_BASE_DIR)) {
+      if (entry.isDirectory) entries.push(entry.name);
+    }
+
+    // Find best matching folder — try exact, then case-insensitive, then partial
+    const lower = companyName.toLowerCase();
+    let folderName = entries.find(e => e === companyName)
+      ?? entries.find(e => e.toLowerCase() === lower)
+      ?? entries.find(e => lower.includes(e.toLowerCase()) || e.toLowerCase().includes(lower));
+
+    if (!folderName) return { resumePath: null, coverLetterPath: null };
+
+    const folderPath = `${RESUME_BASE_DIR}/${folderName}`;
+    const files: string[] = [];
+    for await (const entry of Deno.readDir(folderPath)) {
+      if (entry.isFile) files.push(entry.name);
+    }
+
+    // Find latest resume (skip OLD files, prefer .docx, then .pdf)
+    const resumeFiles = files
+      .filter(f => f.toLowerCase().includes("resume") && !f.includes("OLD"))
+      .sort();
+    const resumeDocx = resumeFiles.find(f => f.endsWith(".docx"));
+    const resumePdf = resumeFiles.find(f => f.endsWith(".pdf"));
+    if (resumeDocx) resumePath = `${folderPath}/${resumeDocx}`;
+    else if (resumePdf) resumePath = `${folderPath}/${resumePdf}`;
+
+    // Find latest cover letter (skip OLD files)
+    const coverFiles = files
+      .filter(f => f.toLowerCase().includes("cover letter") && !f.includes("OLD"))
+      .sort();
+    const coverDocx = coverFiles.find(f => f.endsWith(".docx"));
+    const coverPdf = coverFiles.find(f => f.endsWith(".pdf"));
+    if (coverDocx) coverLetterPath = `${folderPath}/${coverDocx}`;
+    else if (coverPdf) coverLetterPath = `${folderPath}/${coverPdf}`;
+  } catch { /* Folder not found, that's fine */ }
+
+  return { resumePath, coverLetterPath };
+}
+
 // --- Commit mode: insert into DB ---
 async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]) {
   let companiesInserted = 0;
@@ -188,7 +238,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
       notes: p.notes ?? null,
       source: p.source ?? null,
       location: p.location ?? null,
-      priority: p.priority ?? null,
+      priority: p.priority ?? "medium",
     };
     if (p.title) postingRow.title = p.title;
     if (p.url) postingRow.url = p.url;
@@ -243,6 +293,14 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
         notes: p.notes ?? null,
       };
       if (p.applied_date) appRow.applied_date = p.applied_date;
+
+      // Look for resume and cover letter in the Dropbox folder
+      const companyName = p.company as string | null;
+      if (companyName) {
+        const { resumePath, coverLetterPath } = await findResumeFiles(companyName);
+        if (resumePath) appRow.resume_path = resumePath;
+        if (coverLetterPath) appRow.cover_letter_path = coverLetterPath;
+      }
 
       const { error: appErr } = await supabase
         .from("applications")
@@ -322,11 +380,23 @@ async function main() {
       if (parsedArray.length > 1) {
         console.log(`    → Multi-job entry: ${parsedArray.length} jobs found`);
       }
+      // For multi-job entries: if any entry has a priority, apply it to all in the group
+      const groupPriority = parsedArray.length > 1
+        ? (parsedArray.find(e => e.priority)?.priority as string ?? "medium")
+        : null;
+
       for (let j = 0; j < parsedArray.length; j++) {
+        // Look up resume/cover letter paths for dry-run visibility
+        const co = parsedArray[j].company as string | null;
+        let resumeInfo: { resumePath: string | null; coverLetterPath: string | null } = { resumePath: null, coverLetterPath: null };
+        if (co) resumeInfo = await findResumeFiles(co);
+        // Default priority: use group priority for multi-job, otherwise medium
+        const entry = { ...parsedArray[j] };
+        if (!entry.priority) entry.priority = groupPriority ?? "medium";
         results.push({
           thought_id: thought.id,
           thought_content: truncated,
-          parsed: parsedArray[j],
+          parsed: { ...entry, _resume_path: resumeInfo.resumePath, _cover_letter_path: resumeInfo.coverLetterPath },
           parse_error: null,
           entry_index: j,
         });
