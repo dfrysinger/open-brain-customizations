@@ -91,7 +91,12 @@ Only extract what is explicitly stated. Do not guess.`;
   const json = await resp.json();
   const raw = json.choices?.[0]?.message?.content;
   if (!raw) throw new Error("Empty response from OpenRouter");
-  const result = JSON.parse(raw);
+  let result;
+  try {
+    result = JSON.parse(raw);
+  } catch (parseErr) {
+    throw new Error(`Failed to parse OpenRouter response as JSON. Raw content: ${raw.slice(0, 500)}`);
+  }
   // Normalize: always return an array
   // Handle cases where LLM wraps array in an object like {"jobs": [...]}
   if (Array.isArray(result)) return result;
@@ -196,7 +201,11 @@ async function findResumeFiles(companyName: string): Promise<{ resumePath: strin
     const coverPdf = coverFiles.find(f => f.endsWith(".pdf"));
     if (coverDocx) coverLetterPath = `${folderPath}/${coverDocx}`;
     else if (coverPdf) coverLetterPath = `${folderPath}/${coverPdf}`;
-  } catch { /* Folder not found, that's fine */ }
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      console.warn(`Warning: resume folder lookup error: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 
   return { resumePath, coverLetterPath };
 }
@@ -454,4 +463,7 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  Deno.exit(1);
+});

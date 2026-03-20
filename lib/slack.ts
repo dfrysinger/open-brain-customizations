@@ -45,5 +45,7 @@ export async function sendSlackMessage(channel: string, text: string): Promise<v
     headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ channel, text }),
   });
-  if (!resp.ok) throw new Error(`Slack API error: ${resp.status}`);
+  if (!resp.ok) throw new Error(`Slack HTTP error: ${resp.status}`);
+  const body = await resp.json();
+  if (!body.ok) throw new Error(`Slack API error: ${body.error}`);
 }

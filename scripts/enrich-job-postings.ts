@@ -77,12 +77,20 @@ async function main() {
     for (const file of ["Cookies", "Login Data", "Web Data", "Local State"]) {
       try {
         await Deno.copyFile(`${CHROME_SOURCE_PROFILE}/Default/${file}`, `${defaultDir}/${file}`);
-      } catch { /* Some files may not exist, that's fine */ }
+      } catch (err) {
+        if (!(err instanceof Deno.errors.NotFound)) {
+          console.warn(`Warning: failed to copy ${file}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
     }
     // Copy Local State to profile root (Chrome needs it there)
     try {
       await Deno.copyFile(`${CHROME_SOURCE_PROFILE}/Local State`, `${tempDir}/Local State`);
-    } catch { /* OK if missing */ }
+    } catch (err) {
+      if (!(err instanceof Deno.errors.NotFound)) {
+        console.warn(`Warning: failed to copy Local State: ${err instanceof Error ? err.message : err}`);
+      }
+    }
   } catch (err) {
     console.error("Failed to copy Chrome profile cookies:", err);
   }
@@ -125,40 +133,48 @@ async function main() {
       }
 
       // Extract job details from the page
-      const details = await page.evaluate(() => {
-        // Try multiple selectors — LinkedIn changes its layout frequently
-        const title = document.querySelector("h1")?.textContent?.trim() || null;
-        const company = document.querySelector(".job-details-jobs-unified-top-card__company-name")?.textContent?.trim()
-          || document.querySelector("[data-test-id='job-details-company-name']")?.textContent?.trim()
-          || document.querySelector(".topcard__org-name-link")?.textContent?.trim()
-          || null;
-        const location = document.querySelector(".job-details-jobs-unified-top-card__bullet")?.textContent?.trim()
-          || document.querySelector(".topcard__flavor--bullet")?.textContent?.trim()
-          || null;
+      const details = await Promise.race([
+        page.evaluate(() => {
+          // Try multiple selectors — LinkedIn changes its layout frequently
+          const title = document.querySelector("h1")?.textContent?.trim() || null;
+          const company = document.querySelector(".job-details-jobs-unified-top-card__company-name")?.textContent?.trim()
+            || document.querySelector("[data-test-id='job-details-company-name']")?.textContent?.trim()
+            || document.querySelector(".topcard__org-name-link")?.textContent?.trim()
+            || null;
+          const location = document.querySelector(".job-details-jobs-unified-top-card__bullet")?.textContent?.trim()
+            || document.querySelector(".topcard__flavor--bullet")?.textContent?.trim()
+            || null;
 
-        // Fallback: parse from page title ("Job Title | Company | LinkedIn")
-        let titleFromPage = title;
-        let companyFromPage = company;
-        if (!title || !company) {
-          const pageTitle = document.title;
-          const parts = pageTitle.split("|").map((s: string) => s.trim());
-          if (parts.length >= 3 && parts[parts.length - 1] === "LinkedIn") {
-            if (!titleFromPage) titleFromPage = parts[0];
-            if (!companyFromPage) companyFromPage = parts[1];
+          // Fallback: parse from page title ("Job Title | Company | LinkedIn")
+          let titleFromPage = title;
+          let companyFromPage = company;
+          if (!title || !company) {
+            const pageTitle = document.title;
+            const parts = pageTitle.split("|").map((s: string) => s.trim());
+            if (parts.length >= 3 && parts[parts.length - 1] === "LinkedIn") {
+              if (!titleFromPage) titleFromPage = parts[0];
+              if (!companyFromPage) companyFromPage = parts[1];
+            }
           }
-        }
 
-        return { title: titleFromPage, company: companyFromPage, location };
-      });
+          return { title: titleFromPage, company: companyFromPage, location };
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("page.evaluate timed out after 15s")), 15000))
+      ]) as { title: string | null; company: string | null; location: string | null };
 
       await page.close();
 
       if (!details.title && !details.company) {
         // Page loaded but couldn't extract — posting may have been removed
-        await supabase
+        const { error: updateErr } = await supabase
           .from("job_postings")
           .update({ enrichment_error: "Could not extract details — posting may have been removed" })
           .eq("id", posting.id);
+        if (updateErr) {
+          console.error(`Update failed for ${posting.id}: ${updateErr.message}`);
+          failedCount++;
+          continue;
+        }
         await sendSlackMessage(channel,
           `Could not enrich ${posting.url} — posting may have been removed.`);
         failedCount++;
@@ -168,20 +184,26 @@ async function main() {
       // Look up or create company
       let company_id: string | null = null;
       if (details.company) {
-        const { data: existing } = await supabase
+        const { data: existing, error: lookupErr } = await supabase
           .from("companies")
           .select("id")
           .ilike("name", details.company)
           .limit(1)
           .single();
+        if (lookupErr) {
+          console.error(`Company lookup failed for "${details.company}": ${lookupErr.message}`);
+        }
         if (existing) {
           company_id = existing.id;
         } else {
-          const { data: newCo } = await supabase
+          const { data: newCo, error: insertErr } = await supabase
             .from("companies")
             .insert({ name: details.company })
             .select("id")
             .single();
+          if (insertErr) {
+            console.error(`Company insert failed for "${details.company}": ${insertErr.message}`);
+          }
           company_id = newCo?.id ?? null;
         }
       }
@@ -193,10 +215,15 @@ async function main() {
       if (details.location) updateFields.location = details.location;
 
       if (Object.keys(updateFields).length > 0) {
-        await supabase
+        const { error: updateErr } = await supabase
           .from("job_postings")
           .update(updateFields)
           .eq("id", posting.id);
+        if (updateErr) {
+          console.error(`Update failed for ${posting.id}: ${updateErr.message}`);
+          failedCount++;
+          continue;
+        }
       }
 
       console.log(`Enriched: ${details.title ?? "?"} at ${details.company ?? "?"} — ${posting.url}`);
@@ -219,8 +246,15 @@ async function main() {
 
   await browser.close();
   // Clean up temp profile
-  try { await Deno.remove(tempDir, { recursive: true }); } catch { /* OK */ }
+  try { await Deno.remove(tempDir, { recursive: true }); } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      console.warn(`Warning: failed to copy ${tempDir}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
   console.log(`Enrichment complete. Enriched: ${enrichedCount}, Failed: ${failedCount}, Session expired: ${sessionExpired}`);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  Deno.exit(1);
+});
