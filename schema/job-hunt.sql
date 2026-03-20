@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     salary_currency TEXT DEFAULT 'USD',
     requirements TEXT[],
     nice_to_haves TEXT[],
+    location TEXT,
     notes TEXT,
     source TEXT CHECK (source IN ('linkedin', 'company-site', 'referral', 'recruiter', 'greenhouse', 'lever', 'workday', 'indeed', 'other') OR source IS NULL),
     posted_date DATE,
