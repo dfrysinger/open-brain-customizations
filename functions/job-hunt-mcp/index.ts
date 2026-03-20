@@ -64,8 +64,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Added company: ${name}`, company: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[add_company] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in add_company: ${message}` }],
         isError: true,
       };
     }
@@ -131,17 +133,15 @@ server.registerTool(
         }
       }
 
-      const row: Record<string, unknown> = {
-        url,
-        company_id: company_id ?? null,
-        title: title ?? null,
-        location: location ?? null,
-        source: source ?? null,
-        salary_min: salary_min ?? null,
-        salary_max: salary_max ?? null,
-        notes: notes ?? null,
-        posted_date: posted_date ?? null,
-      };
+      const row: Record<string, unknown> = { url };
+      if (company_id != null) row.company_id = company_id;
+      if (title != null) row.title = title;
+      if (location != null) row.location = location;
+      if (source != null) row.source = source;
+      if (salary_min != null) row.salary_min = salary_min;
+      if (salary_max != null) row.salary_max = salary_max;
+      if (notes != null) row.notes = notes;
+      if (posted_date != null) row.posted_date = posted_date;
 
       const { data, error } = await supabase
         .from("job_postings")
@@ -160,8 +160,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Upserted job posting: ${title ?? url}`, job_posting: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[add_job_posting] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in add_job_posting: ${message}` }],
         isError: true,
       };
     }
@@ -211,8 +213,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: "Application recorded successfully", application: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[submit_application] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in submit_application: ${message}` }],
         isError: true,
       };
     }
@@ -250,8 +254,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Application status updated to: ${status}`, application: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[update_application_status] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in update_application_status: ${message}` }],
         isError: true,
       };
     }
@@ -302,8 +308,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: "Interview scheduled successfully", interview: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[schedule_interview] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in schedule_interview: ${message}` }],
         isError: true,
       };
     }
@@ -346,8 +354,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: "Interview notes logged and status updated to completed", interview: data }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[log_interview_notes] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in log_interview_notes: ${message}` }],
         isError: true,
       };
     }
@@ -420,8 +430,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[get_pipeline_overview] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in get_pipeline_overview: ${message}` }],
         isError: true,
       };
     }
@@ -472,8 +484,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ count: (data ?? []).length, interviews: data ?? [] }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[get_upcoming_interviews] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in get_upcoming_interviews: ${message}` }],
         isError: true,
       };
     }
@@ -520,17 +534,26 @@ server.registerTool(
 
       if (query) {
         // Find companies matching the query
-        const { data: matchingCos } = await supabase
+        const { data: matchingCos, error: coErr } = await supabase
           .from("companies")
           .select("id")
           .ilike("name", `%${query}%`);
+        if (coErr) {
+          console.error("Company search error:", coErr);
+        }
         const coIds = (matchingCos ?? []).map((c: any) => c.id);
 
+        // Escape PostgREST special characters in the query
+        const safeQuery = query.replace(/[%_]/g, '\\$&');
+
+        const filters: string[] = [
+          `title.ilike.%${safeQuery}%`,
+          `notes.ilike.%${safeQuery}%`,
+        ];
         if (coIds.length > 0) {
-          q = q.or(`title.ilike.%${query}%,notes.ilike.%${query}%,company_id.in.(${coIds.join(",")})`);
-        } else {
-          q = q.or(`title.ilike.%${query}%,notes.ilike.%${query}%`);
+          filters.push(`company_id.in.(${coIds.join(",")})`);
         }
+        q = q.or(filters.join(","));
       }
 
       const { data, error } = await q.order("created_at", { ascending: false });
@@ -548,8 +571,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ count: results.length, job_postings: results }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[search_job_postings] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in search_job_postings: ${message}` }],
         isError: true,
       };
     }
@@ -642,10 +667,18 @@ server.registerTool(
 
       if (updateError) {
         // Compensating action: delete the professional contact we just created
-        await supabase
+        const { error: deleteErr } = await supabase
           .from("professional_contacts")
           .delete()
           .eq("id", professionalContact.id);
+
+        if (deleteErr) {
+          console.error("CRITICAL: Failed to clean up orphaned professional contact:", professionalContact.id, deleteErr);
+          return {
+            content: [{ type: "text" as const, text: `Link failed AND cleanup failed. Orphaned record ID: ${professionalContact.id}. Manual cleanup required.` }],
+            isError: true,
+          };
+        }
 
         return {
           content: [{ type: "text" as const, text: `Failed to link contact (rolled back professional contact): ${updateError.message}` }],
@@ -657,8 +690,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Linked ${jobContact.name} to Professional CRM`, job_contact: updatedJobContact, professional_contact: professionalContact }, null, 2) }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[link_contact_to_professional_crm] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error in link_contact_to_professional_crm: ${message}` }],
         isError: true,
       };
     }
