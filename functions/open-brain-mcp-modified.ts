@@ -152,8 +152,10 @@ server.registerTool(
         ],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[search_thoughts] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }
@@ -225,8 +227,10 @@ server.registerTool(
         ],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[list_thoughts] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }
@@ -296,8 +300,10 @@ server.registerTool(
 
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[thought_stats] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }
@@ -348,8 +354,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: confirmation }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[capture_thought] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }

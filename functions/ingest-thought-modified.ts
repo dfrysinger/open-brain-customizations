@@ -62,6 +62,10 @@ async function replyInSlack(channel: string, threadTs: string, text: string): Pr
     headers: { "Authorization": `Bearer ${SLACK_BOT_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({ channel, thread_ts: threadTs, text }),
   });
+  if (!resp.ok) {
+    console.error(`Slack HTTP error: ${resp.status}`);
+    return;
+  }
   const body = await resp.json();
   if (!body.ok) {
     console.error(`Slack reply failed: ${body.error}`);
@@ -116,12 +120,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
       // Look up or create company if we got a name
       let company_id: string | null = null;
       if (companyName) {
-        const { data: existing } = await supabase
+        const { data: existing, error: lookupErr } = await supabase
           .from("companies")
           .select("id")
           .ilike("name", companyName)
           .limit(1)
           .single();
+        if (lookupErr) {
+          console.error(`Company lookup error: ${lookupErr.message}`);
+        }
         if (existing) {
           company_id = existing.id;
         } else {
