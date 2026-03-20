@@ -225,12 +225,16 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
 
     // Upsert company (deduplicate by case-insensitive name)
     if (p.company && typeof p.company === "string") {
-      const { data: existing } = await supabase
+      const { data: existing, error: lookupErr } = await supabase
         .from("companies")
         .select("id")
         .ilike("name", p.company)
         .limit(1)
         .maybeSingle();
+
+      if (lookupErr) {
+        console.error(`Company lookup error for "${p.company}": ${lookupErr.message}`);
+      }
 
       if (existing) {
         companyId = existing.id;

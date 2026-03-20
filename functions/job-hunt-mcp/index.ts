@@ -86,7 +86,7 @@ server.registerTool(
       company_name: z.string().optional().describe("Company name (case-insensitive lookup; created if not found)"),
       title: z.string().optional().describe("Job title"),
       location: z.string().optional().describe("Job location"),
-      source: z.enum(["linkedin", "company-site", "referral", "recruiter", "other"]).optional().describe("Where you found this posting"),
+      source: z.enum(["linkedin", "greenhouse", "lever", "workday", "indeed", "company-site", "referral", "recruiter", "other"]).optional().describe("Where you found this posting"),
       salary_min: z.number().optional().describe("Minimum salary"),
       salary_max: z.number().optional().describe("Maximum salary"),
       notes: z.string().optional().describe("Notes about the role"),
@@ -503,7 +503,7 @@ server.registerTool(
     inputSchema: {
       query: z.string().optional().describe("Text search across title, company name, and notes (case-insensitive)"),
       status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("Filter by application status"),
-      source: z.enum(["linkedin", "company-site", "referral", "recruiter", "other"]).optional().describe("Filter by posting source"),
+      source: z.enum(["linkedin", "greenhouse", "lever", "workday", "indeed", "company-site", "referral", "recruiter", "other"]).optional().describe("Filter by posting source"),
       url: z.string().optional().describe("Exact URL match"),
     },
   },
