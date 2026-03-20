@@ -544,7 +544,7 @@ server.registerTool(
         const coIds = (matchingCos ?? []).map((c: any) => c.id);
 
         // Escape PostgREST special characters in the query
-        const safeQuery = query.replace(/[%_]/g, '\\$&');
+        const safeQuery = query.replace(/[%_.,()\\]/g, '\\$&');
 
         const filters: string[] = [
           `title.ilike.%${safeQuery}%`,

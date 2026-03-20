@@ -189,7 +189,7 @@ async function main() {
           .select("id")
           .ilike("name", details.company)
           .limit(1)
-          .single();
+          .maybeSingle();
         if (lookupErr) {
           console.error(`Company lookup failed for "${details.company}": ${lookupErr.message}`);
         }
@@ -235,10 +235,13 @@ async function main() {
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await supabase
+      const { error: markErr } = await supabase
         .from("job_postings")
         .update({ enrichment_error: `Enrichment failed: ${msg}` })
         .eq("id", posting.id);
+      if (markErr) {
+        console.error(`Failed to record enrichment_error for ${posting.id}: ${markErr.message}`);
+      }
       console.error(`Failed to enrich ${posting.url}: ${msg}`);
       failedCount++;
     }
@@ -248,7 +251,7 @@ async function main() {
   // Clean up temp profile
   try { await Deno.remove(tempDir, { recursive: true }); } catch (err) {
     if (!(err instanceof Deno.errors.NotFound)) {
-      console.warn(`Warning: failed to copy ${tempDir}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`Warning: failed to remove ${tempDir}: ${err instanceof Error ? err.message : err}`);
     }
   }
   console.log(`Enrichment complete. Enriched: ${enrichedCount}, Failed: ${failedCount}, Session expired: ${sessionExpired}`);

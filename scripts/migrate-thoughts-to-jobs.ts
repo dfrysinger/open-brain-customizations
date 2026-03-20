@@ -230,7 +230,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
         .select("id")
         .ilike("name", p.company)
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (existing) {
         companyId = existing.id;
