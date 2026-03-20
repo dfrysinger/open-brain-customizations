@@ -495,13 +495,20 @@ server.registerTool(
   },
   async ({ query, status, source, url }) => {
     try {
-      let q = supabase
-        .from("job_postings")
-        .select(`
-          *,
-          companies(*),
-          applications(id, status, applied_date)
-        `);
+      // Build select based on whether status filter is needed
+      let q;
+      if (status) {
+        // Inner join — only postings with matching application status
+        q = supabase
+          .from("job_postings")
+          .select("*, companies(name), applications!inner(id, status, applied_date)")
+          .eq("applications.status", status);
+      } else {
+        // Left join — all postings, applications if they exist
+        q = supabase
+          .from("job_postings")
+          .select("*, companies(name), applications(id, status, applied_date)");
+      }
 
       if (url) {
         q = q.eq("url", url);
@@ -512,8 +519,18 @@ server.registerTool(
       }
 
       if (query) {
-        // ilike search across title, notes, and company name
-        q = q.or(`title.ilike.%${query}%,notes.ilike.%${query}%,companies.name.ilike.%${query}%`);
+        // Find companies matching the query
+        const { data: matchingCos } = await supabase
+          .from("companies")
+          .select("id")
+          .ilike("name", `%${query}%`);
+        const coIds = (matchingCos ?? []).map((c: any) => c.id);
+
+        if (coIds.length > 0) {
+          q = q.or(`title.ilike.%${query}%,notes.ilike.%${query}%,company_id.in.(${coIds.join(",")})`);
+        } else {
+          q = q.or(`title.ilike.%${query}%,notes.ilike.%${query}%`);
+        }
       }
 
       const { data, error } = await q.order("created_at", { ascending: false });
@@ -525,15 +542,7 @@ server.registerTool(
         };
       }
 
-      let results = data ?? [];
-
-      // Filter by application status post-query (since it's on a joined table)
-      if (status) {
-        results = results.filter((r: Record<string, unknown>) => {
-          const apps = r.applications as Array<{ status: string }> | null;
-          return apps && apps.some((a) => a.status === status);
-        });
-      }
+      const results = data ?? [];
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ count: results.length, job_postings: results }, null, 2) }],
