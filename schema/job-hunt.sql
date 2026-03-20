@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     source TEXT CHECK (source IN ('linkedin', 'company-site', 'referral', 'recruiter', 'greenhouse', 'lever', 'workday', 'indeed', 'other') OR source IS NULL),
     posted_date DATE,
     closing_date DATE,
+    priority TEXT CHECK (priority IN ('high', 'medium', 'low') OR priority IS NULL),
     enrichment_error TEXT,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -47,6 +48,8 @@ CREATE TABLE IF NOT EXISTS applications (
     applied_date DATE,
     response_date DATE,
     resume_version TEXT,
+    resume_path TEXT,
+    cover_letter_path TEXT,
     cover_letter_notes TEXT,
     referral_contact TEXT,
     notes TEXT,

@@ -28,8 +28,13 @@ async function getSupabaseClient(): Promise<SupabaseClient> {
 }
 
 // --- OpenRouter LLM call ---
-async function callOpenRouter(apiKey: string, content: string): Promise<Record<string, unknown>> {
-  const PARSE_PROMPT = `Parse this job application note into structured JSON. Return:
+async function callOpenRouter(apiKey: string, content: string): Promise<Record<string, unknown>[]> {
+  const PARSE_PROMPT = `Parse this job application note into structured JSON.
+
+If the text describes a SINGLE job, return a single JSON object.
+If the text contains MULTIPLE job listings or URLs, return a JSON array of objects.
+
+Each object should have:
 {
   "company": "company name or null",
   "title": "job title or null",
@@ -38,8 +43,19 @@ async function callOpenRouter(apiKey: string, content: string): Promise<Record<s
   "applied_date": "YYYY-MM-DD or null",
   "location": "job location or null",
   "source": "linkedin, company-site, referral, recruiter, other, or null",
-  "notes": "any additional context worth preserving (networking contacts, cover letter notes, etc.)"
+  "priority": "high, medium, or low — set to high if the job was specifically recommended or flagged as interesting, otherwise null",
+  "notes": "any additional context worth preserving (cover letter notes, etc.) — do NOT put networking contacts here",
+  "contacts": [
+    {
+      "name": "person's name",
+      "linkedin_url": "their LinkedIn URL or null",
+      "role_in_process": "one of: recruiter, hiring_manager, referral, interviewer, other",
+      "networked": "true if already reached out/contacted, false if not yet",
+      "notes": "any context about this contact"
+    }
+  ]
 }
+IMPORTANT: All dates without an explicit year are in 2026. For example, "1/15" means "2026-01-15", "2/25" means "2026-02-25".
 Only extract what is explicitly stated. Do not guess.`;
 
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -67,7 +83,13 @@ Only extract what is explicitly stated. Do not guess.`;
   const json = await resp.json();
   const raw = json.choices?.[0]?.message?.content;
   if (!raw) throw new Error("Empty response from OpenRouter");
-  return JSON.parse(raw);
+  const result = JSON.parse(raw);
+  // Normalize: always return an array
+  // Handle cases where LLM wraps array in an object like {"jobs": [...]}
+  if (Array.isArray(result)) return result;
+  const values = Object.values(result);
+  if (values.length === 1 && Array.isArray(values[0])) return values[0] as Record<string, unknown>[];
+  return [result];
 }
 
 // --- Types ---
@@ -76,6 +98,11 @@ interface ParsedEntry {
   thought_content: string;
   parsed: Record<string, unknown> | null;
   parse_error: string | null;
+}
+
+// Flattened entry — one per job (multi-job thoughts produce multiple entries)
+interface FlatEntry extends ParsedEntry {
+  entry_index: number; // 0 for single-job thoughts, 0..N for multi-job
 }
 
 // --- Query job-related thoughts ---
@@ -96,10 +123,18 @@ async function fetchJobThoughts(supabase: SupabaseClient) {
 
   if (err2) throw new Error(`Query error (job search): ${err2.message}`);
 
+  // Also catch thoughts tagged with "jobs" topic (e.g., messages with multiple job links)
+  const { data: set3, error: err3 } = await supabase
+    .from("thoughts")
+    .select("id, content, metadata, created_at")
+    .contains("metadata", { topics: ["jobs"] });
+
+  if (err3) throw new Error(`Query error (jobs): ${err3.message}`);
+
   // Deduplicate by id
   const seen = new Set<string>();
   const combined = [];
-  for (const row of [...(set1 ?? []), ...(set2 ?? [])]) {
+  for (const row of [...(set1 ?? []), ...(set2 ?? []), ...(set3 ?? [])]) {
     if (!seen.has(row.id)) {
       seen.add(row.id);
       combined.push(row);
@@ -113,6 +148,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
   let companiesInserted = 0;
   let postingsInserted = 0;
   let applicationsInserted = 0;
+  let contactsInserted = 0;
 
   for (const entry of entries) {
     if (entry.parse_error || !entry.parsed) continue;
@@ -152,6 +188,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
       notes: p.notes ?? null,
       source: p.source ?? null,
       location: p.location ?? null,
+      priority: p.priority ?? null,
     };
     if (p.title) postingRow.title = p.title;
     if (p.url) postingRow.url = p.url;
@@ -216,9 +253,36 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
         applicationsInserted++;
       }
     }
+
+    // Insert job_contacts if any
+    const contacts = p.contacts as Array<Record<string, unknown>> | undefined;
+    if (contacts && Array.isArray(contacts) && contacts.length > 0) {
+      for (const contact of contacts) {
+        if (!contact.name) continue;
+        // If networked=true, set last_contacted to applied_date (or now if no date)
+        const wasNetworked = contact.networked === true || contact.networked === "true";
+        const appliedDate = p.applied_date as string | null;
+        const contactRow: Record<string, unknown> = {
+          company_id: companyId,
+          name: contact.name,
+          linkedin_url: contact.linkedin_url ?? null,
+          role_in_process: contact.role_in_process ?? null,
+          notes: contact.notes ?? null,
+          last_contacted: wasNetworked ? (appliedDate ?? new Date().toISOString()) : null,
+        };
+        const { error: contactErr } = await supabase
+          .from("job_contacts")
+          .insert(contactRow);
+        if (contactErr) {
+          console.error(`  Failed to insert contact "${contact.name}": ${contactErr.message}`);
+        } else {
+          contactsInserted++;
+        }
+      }
+    }
   }
 
-  return { companiesInserted, postingsInserted, applicationsInserted };
+  return { companiesInserted, postingsInserted, applicationsInserted, contactsInserted };
 }
 
 // --- Main ---
@@ -242,34 +306,40 @@ async function main() {
   }
 
   // Parse each thought with OpenRouter
-  const results: ParsedEntry[] = [];
+  const results: FlatEntry[] = [];
   let successCount = 0;
   let failCount = 0;
 
   for (let i = 0; i < thoughts.length; i++) {
     const thought = thoughts[i];
     console.log(`  Parsing thought ${i + 1}/${thoughts.length} (${thought.id})...`);
+    const truncated = thought.content.length > 200
+      ? thought.content.slice(0, 200) + "..."
+      : thought.content;
 
     try {
-      const parsed = await callOpenRouter(openRouterKey, thought.content);
-      results.push({
-        thought_id: thought.id,
-        thought_content: thought.content.length > 200
-          ? thought.content.slice(0, 200) + "..."
-          : thought.content,
-        parsed,
-        parse_error: null,
-      });
+      const parsedArray = await callOpenRouter(openRouterKey, thought.content);
+      if (parsedArray.length > 1) {
+        console.log(`    → Multi-job entry: ${parsedArray.length} jobs found`);
+      }
+      for (let j = 0; j < parsedArray.length; j++) {
+        results.push({
+          thought_id: thought.id,
+          thought_content: truncated,
+          parsed: parsedArray[j],
+          parse_error: null,
+          entry_index: j,
+        });
+      }
       successCount++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       results.push({
         thought_id: thought.id,
-        thought_content: thought.content.length > 200
-          ? thought.content.slice(0, 200) + "..."
-          : thought.content,
+        thought_content: truncated,
         parsed: null,
         parse_error: msg,
+        entry_index: 0,
       });
       failCount++;
     }
@@ -291,6 +361,7 @@ async function main() {
     console.log(`Companies inserted:      ${stats.companiesInserted}`);
     console.log(`Job postings inserted:   ${stats.postingsInserted}`);
     console.log(`Applications inserted:   ${stats.applicationsInserted}`);
+    console.log(`Contacts inserted:       ${stats.contactsInserted}`);
   } else {
     // Dry run: write results to JSON
     const outPath = new URL("./migration-dry-run.json", import.meta.url).pathname;
