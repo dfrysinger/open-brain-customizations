@@ -9,8 +9,16 @@ async function readOp(item: string, field: string): Promise<string> {
     stdout: "piped",
     stderr: "piped",
   });
-  const { stdout } = await proc.output();
-  return new TextDecoder().decode(stdout).trim();
+  const output = await proc.output();
+  if (!output.success) {
+    const stderr = new TextDecoder().decode(output.stderr).trim();
+    throw new Error(`1Password lookup failed for ${item}/${field}: ${stderr || 'unknown error (exit code ' + output.code + ')'}`);
+  }
+  const value = new TextDecoder().decode(output.stdout).trim();
+  if (!value) {
+    throw new Error(`1Password returned empty value for ${item}/${field}`);
+  }
+  return value;
 }
 
 // Cache credentials at module load
