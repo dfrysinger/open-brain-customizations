@@ -120,15 +120,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       // Look up or create company if we got a name
       let company_id: string | null = null;
       if (companyName) {
-        const { data: existing, error: lookupErr } = await supabase
+        const { data: existing } = await supabase
           .from("companies")
           .select("id")
           .ilike("name", companyName)
           .limit(1)
-          .single();
-        if (lookupErr) {
-          console.error(`Company lookup error: ${lookupErr.message}`);
-        }
+          .maybeSingle();
         if (existing) {
           company_id = existing.id;
         } else {

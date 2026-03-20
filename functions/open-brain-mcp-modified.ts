@@ -247,14 +247,22 @@ server.registerTool(
   },
   async () => {
     try {
-      const { count } = await supabase
+      const { count, error: countErr } = await supabase
         .from("thoughts")
         .select("*", { count: "exact", head: true });
 
-      const { data } = await supabase
+      if (countErr) {
+        return { content: [{ type: "text" as const, text: `Stats error: ${countErr.message}` }], isError: true };
+      }
+
+      const { data, error: dataErr } = await supabase
         .from("thoughts")
         .select("metadata, created_at")
         .order("created_at", { ascending: false });
+
+      if (dataErr) {
+        return { content: [{ type: "text" as const, text: `Stats error: ${dataErr.message}` }], isError: true };
+      }
 
       const types: Record<string, number> = {};
       const topics: Record<string, number> = {};
