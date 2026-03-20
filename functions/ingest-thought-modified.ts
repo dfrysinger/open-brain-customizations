@@ -15,6 +15,10 @@ async function getEmbedding(text: string): Promise<number[]> {
     headers: { "Authorization": `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text }),
   });
+  if (!r.ok) {
+    const msg = await r.text().catch(() => "");
+    throw new Error(`OpenRouter embeddings failed: ${r.status} ${msg}`);
+  }
   const d = await r.json();
   return d.data[0].embedding;
 }
@@ -38,17 +42,30 @@ Only extract what's explicitly there.` },
       ],
     }),
   });
+  if (!r.ok) {
+    const msg = await r.text().catch(() => "");
+    console.error(`OpenRouter metadata extraction failed: ${r.status} ${msg}`);
+    return { topics: ["uncategorized"], type: "observation", _extraction_failed: true };
+  }
   const d = await r.json();
-  try { return JSON.parse(d.choices[0].message.content); }
-  catch { return { topics: ["uncategorized"], type: "observation" }; }
+  try {
+    return JSON.parse(d.choices[0].message.content);
+  } catch (parseErr) {
+    console.error("Failed to parse metadata response:", d.choices?.[0]?.message?.content?.slice(0, 200));
+    return { topics: ["uncategorized"], type: "observation", _extraction_failed: true };
+  }
 }
 
 async function replyInSlack(channel: string, threadTs: string, text: string): Promise<void> {
-  await fetch("https://slack.com/api/chat.postMessage", {
+  const resp = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: { "Authorization": `Bearer ${SLACK_BOT_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({ channel, thread_ts: threadTs, text }),
   });
+  const body = await resp.json();
+  if (!body.ok) {
+    console.error(`Slack reply failed: ${body.error}`);
+  }
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -108,22 +125,28 @@ Deno.serve(async (req: Request): Promise<Response> => {
         if (existing) {
           company_id = existing.id;
         } else {
-          const { data: newCo } = await supabase
+          const { data: newCo, error: coErr } = await supabase
             .from("companies")
             .insert({ name: companyName })
             .select("id")
             .single();
-          company_id = newCo?.id ?? null;
+          if (coErr) {
+            console.error(`Failed to create company "${companyName}": ${coErr.message}`);
+          } else {
+            company_id = newCo?.id ?? null;
+          }
         }
       }
 
       // Upsert job posting (URL is unique)
+      const row: Record<string, unknown> = { url: jobUrl, source: "linkedin" };
+      if (company_id != null) row.company_id = company_id;
+      if (title != null) row.title = title;
+      if (location != null) row.location = location;
+
       const { data: jobPosting, error: jpError } = await supabase
         .from("job_postings")
-        .upsert(
-          { url: jobUrl, company_id, title, location, source: "linkedin" },
-          { onConflict: "url" }
-        )
+        .upsert(row, { onConflict: "url" })
         .select()
         .single();
 

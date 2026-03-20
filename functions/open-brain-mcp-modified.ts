@@ -59,11 +59,17 @@ Only extract what's explicitly there.`,
       ],
     }),
   });
+  if (!r.ok) {
+    const msg = await r.text().catch(() => "");
+    console.error(`OpenRouter metadata extraction failed: ${r.status} ${msg}`);
+    return { topics: ["uncategorized"], type: "observation", _extraction_failed: true };
+  }
   const d = await r.json();
   try {
     return JSON.parse(d.choices[0].message.content);
-  } catch {
-    return { topics: ["uncategorized"], type: "observation" };
+  } catch (parseErr) {
+    console.error("Failed to parse metadata response:", d.choices?.[0]?.message?.content?.slice(0, 200));
+    return { topics: ["uncategorized"], type: "observation", _extraction_failed: true };
   }
 }
 
@@ -403,8 +409,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: `Updated thought ${thought_id}` }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[update_thought] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }
@@ -453,8 +461,10 @@ server.registerTool(
         content: [{ type: "text" as const, text: `Deleted thought ${thought_id}` }],
       };
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[delete_thought] Error:`, err);
       return {
-        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
       };
     }
