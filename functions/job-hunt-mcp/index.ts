@@ -184,9 +184,12 @@ server.registerTool(
       cover_letter_notes: z.string().optional().describe("Notes about cover letter"),
       referral_contact: z.string().optional().describe("Referral contact name"),
       notes: z.string().optional().describe("Additional notes"),
+      resume_path: z.string().optional().describe("Path to generated resume file"),
+      cover_letter_path: z.string().optional().describe("Path to cover letter file"),
+      response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
     },
   },
-  async ({ job_posting_id, status, applied_date, resume_version, cover_letter_notes, referral_contact, notes }) => {
+  async ({ job_posting_id, status, applied_date, resume_version, cover_letter_notes, referral_contact, notes, resume_path, cover_letter_path, response_date }) => {
     try {
       const { data, error } = await supabase
         .from("applications")
@@ -198,6 +201,9 @@ server.registerTool(
           cover_letter_notes: cover_letter_notes ?? null,
           referral_contact: referral_contact ?? null,
           notes: notes ?? null,
+          resume_path: resume_path ?? null,
+          cover_letter_path: cover_letter_path ?? null,
+          response_date: response_date ?? null,
         })
         .select()
         .single();
