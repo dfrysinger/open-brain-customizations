@@ -91,9 +91,12 @@ server.registerTool(
       salary_max: z.number().optional().describe("Maximum salary"),
       notes: z.string().optional().describe("Notes about the role"),
       posted_date: z.string().optional().describe("Date posted (YYYY-MM-DD)"),
+      priority: z.enum(["high", "medium", "low"]).optional().describe("Job priority"),
+      salary_currency: z.string().optional().describe("Salary currency (defaults to USD)"),
+      closing_date: z.string().optional().describe("Posting closing date (YYYY-MM-DD)"),
     },
   },
-  async ({ url, company_name, title, location, source, salary_min, salary_max, notes, posted_date }) => {
+  async ({ url, company_name, title, location, source, salary_min, salary_max, notes, posted_date, priority, salary_currency, closing_date }) => {
     try {
       let company_id: string | null = null;
 
@@ -142,6 +145,9 @@ server.registerTool(
       if (salary_max != null) row.salary_max = salary_max;
       if (notes != null) row.notes = notes;
       if (posted_date != null) row.posted_date = posted_date;
+      if (priority != null) row.priority = priority;
+      if (salary_currency != null) row.salary_currency = salary_currency;
+      if (closing_date != null) row.closing_date = closing_date;
 
       const { data, error } = await supabase
         .from("job_postings")
