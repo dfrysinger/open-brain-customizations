@@ -238,13 +238,21 @@ server.registerTool(
     inputSchema: {
       application_id: z.string().uuid().describe("Application ID (UUID)"),
       status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).describe("New application status"),
+      resume_path: z.string().optional().describe("Path to generated resume file"),
+      cover_letter_path: z.string().optional().describe("Path to cover letter file"),
+      response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
     },
   },
-  async ({ application_id, status }) => {
+  async ({ application_id, status, resume_path, cover_letter_path, response_date }) => {
     try {
       const { data, error } = await supabase
         .from("applications")
-        .update({ status })
+        .update({
+          status,
+          ...(resume_path != null && { resume_path }),
+          ...(cover_letter_path != null && { cover_letter_path }),
+          ...(response_date != null && { response_date }),
+        })
         .eq("id", application_id)
         .select()
         .single();
