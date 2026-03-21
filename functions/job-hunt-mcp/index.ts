@@ -505,9 +505,10 @@ server.registerTool(
       status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("Filter by application status"),
       source: z.enum(["linkedin", "greenhouse", "lever", "workday", "indeed", "company-site", "referral", "recruiter", "other"]).optional().describe("Filter by posting source"),
       url: z.string().optional().describe("Exact URL match"),
+      priority: z.enum(["high", "medium", "low"]).optional().describe("Filter by job priority"),
     },
   },
-  async ({ query, status, source, url }) => {
+  async ({ query, status, source, url, priority }) => {
     try {
       // Build select based on whether status filter is needed
       let q;
@@ -515,13 +516,13 @@ server.registerTool(
         // Inner join — only postings with matching application status
         q = supabase
           .from("job_postings")
-          .select("*, companies(name), applications!inner(id, status, applied_date)")
+          .select("*, companies(name), applications!inner(id, status, applied_date, resume_path, cover_letter_path)")
           .eq("applications.status", status);
       } else {
         // Left join — all postings, applications if they exist
         q = supabase
           .from("job_postings")
-          .select("*, companies(name), applications(id, status, applied_date)");
+          .select("*, companies(name), applications(id, status, applied_date, resume_path, cover_letter_path)");
       }
 
       if (url) {
@@ -530,6 +531,10 @@ server.registerTool(
 
       if (source) {
         q = q.eq("source", source);
+      }
+
+      if (priority) {
+        q = q.eq("priority", priority);
       }
 
       if (query) {
