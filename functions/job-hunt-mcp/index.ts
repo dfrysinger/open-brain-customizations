@@ -575,16 +575,17 @@ server.registerTool(
   "search_job_postings",
   {
     title: "Search Job Postings",
-    description: "Search job postings by text query (title/company/notes), status, source, or exact URL. Shows application status if one exists.",
+    description: "Search job postings by text query (title/company/notes), status, source, or exact URL. Shows application status if one exists. Use has_application filter to find postings with or without applications.",
     inputSchema: {
       query: z.string().optional().describe("Text search across title, company name, and notes (case-insensitive)"),
       status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("Filter by application status"),
       source: z.enum(["linkedin", "greenhouse", "lever", "workday", "indeed", "company-site", "referral", "recruiter", "other"]).optional().describe("Filter by posting source"),
       url: z.string().optional().describe("Exact URL match"),
       priority: z.enum(["high", "medium", "low"]).optional().describe("Filter by job priority"),
+      has_application: z.boolean().optional().describe("Filter by whether an application exists. true = only postings with applications, false = only postings without applications"),
     },
   },
-  async ({ query, status, source, url, priority }) => {
+  async ({ query, status, source, url, priority, has_application }) => {
     try {
       // Build select based on whether status filter is needed
       let q;
@@ -646,7 +647,14 @@ server.registerTool(
         };
       }
 
-      const results = data ?? [];
+      let results = data ?? [];
+
+      // Filter by has_application if specified (can't do this in PostgREST for empty arrays)
+      if (has_application === true) {
+        results = results.filter((p: any) => p.applications && p.applications.length > 0);
+      } else if (has_application === false) {
+        results = results.filter((p: any) => !p.applications || p.applications.length === 0);
+      }
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ count: results.length, job_postings: results }, null, 2) }],
