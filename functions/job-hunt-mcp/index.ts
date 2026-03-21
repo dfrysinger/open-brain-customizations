@@ -184,7 +184,7 @@ server.registerTool(
     description: "Record a submitted job application.",
     inputSchema: {
       job_posting_id: z.string().uuid().describe("Job posting ID (UUID)"),
-      status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().default("applied").describe("Application status"),
+      status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().default("applied").describe("Application status"),
       applied_date: z.string().optional().describe("Date applied (YYYY-MM-DD)"),
       resume_version: z.string().optional().describe("Resume version used"),
       cover_letter_notes: z.string().optional().describe("Notes about cover letter"),
@@ -243,7 +243,7 @@ server.registerTool(
     description: "Update the status of an existing application.",
     inputSchema: {
       application_id: z.string().uuid().describe("Application ID (UUID)"),
-      status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).describe("New application status"),
+      status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).describe("New application status"),
       resume_path: z.string().optional().describe("Path to generated resume file"),
       cover_letter_path: z.string().optional().describe("Path to cover letter file"),
       response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
@@ -522,7 +522,7 @@ server.registerTool(
     description: "Search job postings by text query (title/company/notes), status, source, or exact URL. Shows application status if one exists.",
     inputSchema: {
       query: z.string().optional().describe("Text search across title, company name, and notes (case-insensitive)"),
-      status: z.enum(["draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("Filter by application status"),
+      status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("Filter by application status"),
       source: z.enum(["linkedin", "greenhouse", "lever", "workday", "indeed", "company-site", "referral", "recruiter", "other"]).optional().describe("Filter by posting source"),
       url: z.string().optional().describe("Exact URL match"),
       priority: z.enum(["high", "medium", "low"]).optional().describe("Filter by job priority"),

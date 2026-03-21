@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     source TEXT CHECK (source IN ('linkedin', 'company-site', 'referral', 'recruiter', 'greenhouse', 'lever', 'workday', 'indeed', 'other') OR source IS NULL),
     posted_date DATE,
     closing_date DATE,
-    priority TEXT CHECK (priority IN ('high', 'medium', 'low') OR priority IS NULL),
+    priority TEXT DEFAULT 'medium' CHECK (priority IN ('high', 'medium', 'low') OR priority IS NULL),
     enrichment_error TEXT,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
 CREATE TABLE IF NOT EXISTS applications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_posting_id UUID REFERENCES job_postings(id) ON DELETE CASCADE NOT NULL,
-    status TEXT DEFAULT 'applied' CHECK (status IN ('draft', 'applied', 'screening', 'interviewing', 'offer', 'accepted', 'rejected', 'withdrawn')),
+    status TEXT DEFAULT 'applied' CHECK (status IN ('draft', 'ready', 'applied', 'screening', 'interviewing', 'offer', 'accepted', 'rejected', 'withdrawn')),
     applied_date DATE,
     response_date DATE,
     resume_version TEXT,
