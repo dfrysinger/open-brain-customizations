@@ -235,49 +235,105 @@ server.registerTool(
   }
 );
 
-// Tool 4: update_application_status (NEW)
+// Tool 4: update_application
 server.registerTool(
-  "update_application_status",
+  "update_application",
   {
-    title: "Update Application Status",
-    description: "Update the status of an existing application.",
+    title: "Update Application",
+    description: "Update any fields on an existing application. All fields are optional — only provided fields are updated.",
     inputSchema: {
       application_id: z.string().uuid().describe("Application ID (UUID)"),
-      status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).describe("New application status"),
+      status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("New application status"),
+      applied_date: z.string().optional().describe("Date applied (YYYY-MM-DD)"),
+      resume_version: z.string().optional().describe("Resume version used"),
       resume_path: z.string().optional().describe("Path to generated resume file"),
       cover_letter_path: z.string().optional().describe("Path to cover letter file"),
+      cover_letter_notes: z.string().optional().describe("Notes about cover letter"),
+      referral_contact: z.string().optional().describe("Referral contact name"),
       response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
+      notes: z.string().optional().describe("Additional notes"),
     },
   },
-  async ({ application_id, status, resume_path, cover_letter_path, response_date }) => {
+  async ({ application_id, status, applied_date, resume_version, resume_path, cover_letter_path, cover_letter_notes, referral_contact, response_date, notes }) => {
     try {
+      const updateFields: Record<string, unknown> = {};
+      if (status != null) updateFields.status = status;
+      if (applied_date != null) updateFields.applied_date = applied_date;
+      if (resume_version != null) updateFields.resume_version = resume_version;
+      if (resume_path != null) updateFields.resume_path = resume_path;
+      if (cover_letter_path != null) updateFields.cover_letter_path = cover_letter_path;
+      if (cover_letter_notes != null) updateFields.cover_letter_notes = cover_letter_notes;
+      if (referral_contact != null) updateFields.referral_contact = referral_contact;
+      if (response_date != null) updateFields.response_date = response_date;
+      if (notes != null) updateFields.notes = notes;
+
+      if (Object.keys(updateFields).length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "No fields provided to update." }],
+          isError: true,
+        };
+      }
+
       const { data, error } = await supabase
         .from("applications")
-        .update({
-          status,
-          ...(resume_path != null && { resume_path }),
-          ...(cover_letter_path != null && { cover_letter_path }),
-          ...(response_date != null && { response_date }),
-        })
+        .update(updateFields)
         .eq("id", application_id)
         .select()
         .single();
 
       if (error) {
         return {
-          content: [{ type: "text" as const, text: `Failed to update application status: ${error.message}` }],
+          content: [{ type: "text" as const, text: `Failed to update application: ${error.message}` }],
           isError: true,
         };
       }
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Application status updated to: ${status}`, application: data }, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: "Application updated successfully", application: data }, null, 2) }],
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[update_application_status] Error:", err);
+      console.error("[update_application] Error:", err);
       return {
-        content: [{ type: "text" as const, text: `Error in update_application_status: ${message}` }],
+        content: [{ type: "text" as const, text: `Error in update_application: ${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool 4b: delete_application
+server.registerTool(
+  "delete_application",
+  {
+    title: "Delete Application",
+    description: "Delete an application record. Use to remove duplicates or erroneous entries.",
+    inputSchema: {
+      application_id: z.string().uuid().describe("Application ID (UUID)"),
+    },
+  },
+  async ({ application_id }) => {
+    try {
+      const { error } = await supabase
+        .from("applications")
+        .delete()
+        .eq("id", application_id);
+
+      if (error) {
+        return {
+          content: [{ type: "text" as const, text: `Failed to delete application: ${error.message}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Application ${application_id} deleted` }, null, 2) }],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[delete_application] Error:", err);
+      return {
+        content: [{ type: "text" as const, text: `Error in delete_application: ${message}` }],
         isError: true,
       };
     }
