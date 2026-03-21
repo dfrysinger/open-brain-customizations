@@ -340,6 +340,44 @@ server.registerTool(
   }
 );
 
+// Tool 4c: delete_job_posting
+server.registerTool(
+  "delete_job_posting",
+  {
+    title: "Delete Job Posting",
+    description: "Delete a job posting and its associated applications. Use to remove duplicates or erroneous entries.",
+    inputSchema: {
+      job_posting_id: z.string().uuid().describe("Job posting ID (UUID)"),
+    },
+  },
+  async ({ job_posting_id }) => {
+    try {
+      const { error } = await supabase
+        .from("job_postings")
+        .delete()
+        .eq("id", job_posting_id);
+
+      if (error) {
+        return {
+          content: [{ type: "text" as const, text: `Failed to delete job posting: ${error.message}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: `Job posting ${job_posting_id} deleted` }, null, 2) }],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[delete_job_posting] Error:", err);
+      return {
+        content: [{ type: "text" as const, text: `Error in delete_job_posting: ${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // Tool 5: schedule_interview
 server.registerTool(
   "schedule_interview",
