@@ -240,32 +240,32 @@ server.registerTool(
   "update_application",
   {
     title: "Update Application",
-    description: "Update any fields on an existing application. All fields are optional — only provided fields are updated.",
+    description: "Update any fields on an existing application. All fields are optional — only provided fields are updated. Pass null to clear a field.",
     inputSchema: {
       application_id: z.string().uuid().describe("Application ID (UUID)"),
       status: z.enum(["draft", "ready", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn"]).optional().describe("New application status"),
-      applied_date: z.string().optional().describe("Date applied (YYYY-MM-DD)"),
-      resume_version: z.string().optional().describe("Resume version used"),
-      resume_path: z.string().optional().describe("Path to generated resume file"),
-      cover_letter_path: z.string().optional().describe("Path to cover letter file"),
-      cover_letter_notes: z.string().optional().describe("Notes about cover letter"),
-      referral_contact: z.string().optional().describe("Referral contact name"),
-      response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
-      notes: z.string().optional().describe("Additional notes"),
+      applied_date: z.string().nullable().optional().describe("Date applied (YYYY-MM-DD). Pass null to clear."),
+      resume_version: z.string().nullable().optional().describe("Resume version used. Pass null to clear."),
+      resume_path: z.string().nullable().optional().describe("Path to generated resume file. Pass null to clear."),
+      cover_letter_path: z.string().nullable().optional().describe("Path to cover letter file. Pass null to clear."),
+      cover_letter_notes: z.string().nullable().optional().describe("Notes about cover letter. Pass null to clear."),
+      referral_contact: z.string().nullable().optional().describe("Referral contact name. Pass null to clear."),
+      response_date: z.string().nullable().optional().describe("Date company responded (YYYY-MM-DD). Pass null to clear."),
+      notes: z.string().nullable().optional().describe("Additional notes. Pass null to clear."),
     },
   },
   async ({ application_id, status, applied_date, resume_version, resume_path, cover_letter_path, cover_letter_notes, referral_contact, response_date, notes }) => {
     try {
       const updateFields: Record<string, unknown> = {};
-      if (status != null) updateFields.status = status;
-      if (applied_date != null) updateFields.applied_date = applied_date;
-      if (resume_version != null) updateFields.resume_version = resume_version;
-      if (resume_path != null) updateFields.resume_path = resume_path;
-      if (cover_letter_path != null) updateFields.cover_letter_path = cover_letter_path;
-      if (cover_letter_notes != null) updateFields.cover_letter_notes = cover_letter_notes;
-      if (referral_contact != null) updateFields.referral_contact = referral_contact;
-      if (response_date != null) updateFields.response_date = response_date;
-      if (notes != null) updateFields.notes = notes;
+      if (status !== undefined) updateFields.status = status;
+      if (applied_date !== undefined) updateFields.applied_date = applied_date;
+      if (resume_version !== undefined) updateFields.resume_version = resume_version;
+      if (resume_path !== undefined) updateFields.resume_path = resume_path;
+      if (cover_letter_path !== undefined) updateFields.cover_letter_path = cover_letter_path;
+      if (cover_letter_notes !== undefined) updateFields.cover_letter_notes = cover_letter_notes;
+      if (referral_contact !== undefined) updateFields.referral_contact = referral_contact;
+      if (response_date !== undefined) updateFields.response_date = response_date;
+      if (notes !== undefined) updateFields.notes = notes;
 
       if (Object.keys(updateFields).length === 0) {
         return {
