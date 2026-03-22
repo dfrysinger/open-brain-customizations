@@ -94,9 +94,11 @@ server.registerTool(
       priority: z.enum(["high", "medium", "low"]).optional().describe("Job priority"),
       salary_currency: z.string().optional().describe("Salary currency (defaults to USD)"),
       closing_date: z.string().optional().describe("Posting closing date (YYYY-MM-DD)"),
+      created_by: z.string().describe("Who is creating this posting (e.g., 'daniel', 'slack-ingest', 'gmail-sync')"),
+      created_by_reason: z.string().optional().describe("Why this posting was created (e.g., 'LinkedIn URL shared in Slack channel')"),
     },
   },
-  async ({ url, company_name, title, location, source, salary_min, salary_max, notes, posted_date, priority, salary_currency, closing_date }) => {
+  async ({ url, company_name, title, location, source, salary_min, salary_max, notes, posted_date, priority, salary_currency, closing_date, created_by, created_by_reason }) => {
     try {
       let company_id: string | null = null;
 
@@ -136,6 +138,15 @@ server.registerTool(
         }
       }
 
+      // Check if posting already exists (to preserve created_by on update)
+      const { data: existingPosting } = await supabase
+        .from("job_postings")
+        .select("id, created_by")
+        .eq("url", url)
+        .maybeSingle();
+
+      const isNewPosting = !existingPosting;
+
       const row: Record<string, unknown> = { url };
       if (company_id != null) row.company_id = company_id;
       if (title != null) row.title = title;
@@ -149,6 +160,11 @@ server.registerTool(
       if (salary_currency != null) row.salary_currency = salary_currency;
       if (closing_date != null) row.closing_date = closing_date;
 
+      // Only set created_by on new inserts; preserve existing value on updates
+      if (isNewPosting) {
+        row.created_by = created_by;
+      }
+
       const { data, error } = await supabase
         .from("job_postings")
         .upsert(row, { onConflict: "url" })
@@ -160,6 +176,17 @@ server.registerTool(
           content: [{ type: "text" as const, text: `Failed to upsert job posting: ${error.message}` }],
           isError: true,
         };
+      }
+
+      // Log attribution for new postings
+      if (isNewPosting) {
+        await supabase.from("attribution_log").insert({
+          entity_type: "job_posting",
+          entity_id: data.id,
+          action: "created",
+          actor: created_by,
+          reason: created_by_reason ?? null,
+        });
       }
 
       return {
@@ -193,9 +220,11 @@ server.registerTool(
       resume_path: z.string().optional().describe("Path to generated resume file"),
       cover_letter_path: z.string().optional().describe("Path to cover letter file"),
       response_date: z.string().optional().describe("Date company responded (YYYY-MM-DD)"),
+      created_by: z.string().describe("Who is creating this application (e.g., 'daniel', 'auto-resume-generator')"),
+      created_by_reason: z.string().optional().describe("Why this application was created"),
     },
   },
-  async ({ job_posting_id, status, applied_date, resume_version, cover_letter_notes, referral_contact, notes, resume_path, cover_letter_path, response_date }) => {
+  async ({ job_posting_id, status, applied_date, resume_version, cover_letter_notes, referral_contact, notes, resume_path, cover_letter_path, response_date, created_by, created_by_reason }) => {
     try {
       const { data, error } = await supabase
         .from("applications")
@@ -210,6 +239,7 @@ server.registerTool(
           resume_path: resume_path ?? null,
           cover_letter_path: cover_letter_path ?? null,
           response_date: response_date ?? null,
+          created_by,
         })
         .select()
         .single();
@@ -220,6 +250,36 @@ server.registerTool(
           isError: true,
         };
       }
+
+      // Log attribution
+      const attributionLogs: Record<string, unknown>[] = [
+        {
+          entity_type: "application",
+          entity_id: data.id,
+          action: "created",
+          actor: created_by,
+          reason: created_by_reason ?? null,
+        },
+      ];
+      if (resume_path) {
+        attributionLogs.push({
+          entity_type: "application",
+          entity_id: data.id,
+          action: "resume_added",
+          actor: created_by,
+          reason: created_by_reason ?? null,
+        });
+      }
+      if (cover_letter_path) {
+        attributionLogs.push({
+          entity_type: "application",
+          entity_id: data.id,
+          action: "cover_letter_added",
+          actor: created_by,
+          reason: created_by_reason ?? null,
+        });
+      }
+      await supabase.from("attribution_log").insert(attributionLogs);
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ success: true, message: "Application recorded successfully", application: data }, null, 2) }],
@@ -252,10 +312,20 @@ server.registerTool(
       referral_contact: z.string().nullable().optional().describe("Referral contact name. Pass null to clear."),
       response_date: z.string().nullable().optional().describe("Date company responded (YYYY-MM-DD). Pass null to clear."),
       notes: z.string().nullable().optional().describe("Additional notes. Pass null to clear."),
+      actor: z.string().describe("Who is making this update (e.g., 'resume-optimizer', 'daniel')"),
+      actor_reason: z.string().optional().describe("Why this update is being made"),
+      created_by: z.string().optional().describe("Override who created this application (for corrections)"),
     },
   },
-  async ({ application_id, status, applied_date, resume_version, resume_path, cover_letter_path, cover_letter_notes, referral_contact, response_date, notes }) => {
+  async ({ application_id, status, applied_date, resume_version, resume_path, cover_letter_path, cover_letter_notes, referral_contact, response_date, notes, actor, actor_reason, created_by }) => {
     try {
+      // Fetch current state for change detection
+      const { data: current } = await supabase
+        .from("applications")
+        .select("status, resume_path, cover_letter_path")
+        .eq("id", application_id)
+        .single();
+
       const updateFields: Record<string, unknown> = {};
       if (status !== undefined) updateFields.status = status;
       if (applied_date !== undefined) updateFields.applied_date = applied_date;
@@ -266,6 +336,7 @@ server.registerTool(
       if (referral_contact !== undefined) updateFields.referral_contact = referral_contact;
       if (response_date !== undefined) updateFields.response_date = response_date;
       if (notes !== undefined) updateFields.notes = notes;
+      if (created_by !== undefined) updateFields.created_by = created_by;
 
       if (Object.keys(updateFields).length === 0) {
         return {
@@ -286,6 +357,21 @@ server.registerTool(
           content: [{ type: "text" as const, text: `Failed to update application: ${error.message}` }],
           isError: true,
         };
+      }
+
+      // Log attribution for changes
+      const logs: Record<string, unknown>[] = [];
+      if (status !== undefined && current && status !== current.status) {
+        logs.push({ entity_type: "application", entity_id: application_id, action: "status_changed", actor, reason: actor_reason ?? `${current.status} -> ${status}` });
+      }
+      if (resume_path !== undefined && resume_path !== current?.resume_path) {
+        logs.push({ entity_type: "application", entity_id: application_id, action: resume_path === null ? "resume_removed" : "resume_added", actor, reason: actor_reason ?? null });
+      }
+      if (cover_letter_path !== undefined && cover_letter_path !== current?.cover_letter_path) {
+        logs.push({ entity_type: "application", entity_id: application_id, action: cover_letter_path === null ? "cover_letter_removed" : "cover_letter_added", actor, reason: actor_reason ?? null });
+      }
+      if (logs.length > 0) {
+        await supabase.from("attribution_log").insert(logs);
       }
 
       return {
@@ -621,9 +707,10 @@ server.registerTool(
       url: z.string().optional().describe("Exact URL match"),
       priority: z.enum(["high", "medium", "low"]).optional().describe("Filter by job priority"),
       has_application: z.boolean().optional().describe("Filter by whether an application exists. true = only postings with applications, false = only postings without applications"),
+      created_by: z.string().optional().describe("Filter by who created the posting (filters job_postings.created_by)"),
     },
   },
-  async ({ query, status, source, url, priority, has_application }) => {
+  async ({ query, status, source, url, priority, has_application, created_by }) => {
     try {
       // Build select based on whether status filter is needed
       let q;
@@ -631,13 +718,13 @@ server.registerTool(
         // Inner join — only postings with matching application status
         q = supabase
           .from("job_postings")
-          .select("*, companies(name), applications!inner(id, status, applied_date, resume_path, cover_letter_path)")
+          .select("*, companies(name), applications!inner(id, status, applied_date, resume_path, cover_letter_path, created_by)")
           .eq("applications.status", status);
       } else {
         // Left join — all postings, applications if they exist
         q = supabase
           .from("job_postings")
-          .select("*, companies(name), applications(id, status, applied_date, resume_path, cover_letter_path)");
+          .select("*, companies(name), applications(id, status, applied_date, resume_path, cover_letter_path, created_by)");
       }
 
       if (url) {
@@ -650,6 +737,10 @@ server.registerTool(
 
       if (priority) {
         q = q.eq("priority", priority);
+      }
+
+      if (created_by) {
+        q = q.eq("created_by", created_by);
       }
 
       if (query) {
@@ -823,6 +914,36 @@ server.registerTool(
         content: [{ type: "text" as const, text: `Error in link_contact_to_professional_crm: ${message}` }],
         isError: true,
       };
+    }
+  }
+);
+
+// Tool 11: get_attribution_history
+server.registerTool(
+  "get_attribution_history",
+  {
+    title: "Get Attribution History",
+    description: "Get the full attribution history for a job posting or application. Returns all logged actions (created, resume_added, status_changed, etc.) in chronological order.",
+    inputSchema: {
+      entity_type: z.enum(["job_posting", "application"]).describe("Type of entity"),
+      entity_id: z.string().uuid().describe("ID of the posting or application"),
+    },
+  },
+  async ({ entity_type, entity_id }) => {
+    try {
+      const { data, error } = await supabase
+        .from("attribution_log")
+        .select("*")
+        .eq("entity_type", entity_type)
+        .eq("entity_id", entity_id)
+        .order("created_at", { ascending: true });
+      if (error) {
+        return { content: [{ type: "text" as const, text: `Failed to get history: ${error.message}` }], isError: true };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify({ count: data?.length ?? 0, history: data }, null, 2) }] };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
     }
   }
 );
