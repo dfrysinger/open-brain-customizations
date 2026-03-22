@@ -281,7 +281,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
       } else {
         const { data: newPosting, error: postErr } = await supabase
           .from("job_postings")
-          .insert(postingRow)
+          .insert({ ...postingRow, created_by: "migration-script" })
           .select("id")
           .single();
         if (postErr) {
@@ -295,7 +295,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
       // No URL — just insert (no dedup possible)
       const { data: newPosting, error: postErr } = await supabase
         .from("job_postings")
-        .insert(postingRow)
+        .insert({ ...postingRow, created_by: "migration-script" })
         .select("id")
         .single();
       if (postErr) {
@@ -325,7 +325,7 @@ async function commitToDatabase(supabase: SupabaseClient, entries: ParsedEntry[]
 
       const { error: appErr } = await supabase
         .from("applications")
-        .insert(appRow);
+        .insert({ ...appRow, created_by: "migration-script" });
       if (appErr) {
         console.error(`  Failed to insert application: ${appErr.message}`);
       } else {
