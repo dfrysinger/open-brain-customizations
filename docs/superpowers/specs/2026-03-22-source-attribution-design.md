@@ -42,6 +42,7 @@ Add `created_by` attribution fields to the `job_postings` and `applications` tab
 | `resume-optimizer` | Agent that creates tailored resumes |
 | `job-applicator` | Agent that fills out job applications |
 | `enrichment-cron` | Daily Mac Mini cron that enriches posting data |
+| `migration-script` | The migrate-thoughts-to-jobs.ts script |
 | `legacy` | Backfill value for records created before this feature |
 | `unknown` | Fallback if source cannot be determined |
 
@@ -64,30 +65,37 @@ ALTER TABLE job_postings ALTER COLUMN created_by DROP DEFAULT;
 ALTER TABLE applications ALTER COLUMN created_by DROP DEFAULT;
 ```
 
+### Note: `schema.sql` is out of sync
+
+The canonical `schema.sql` in `open-brain/extensions/job-hunt/` is missing several columns that exist in the live database: `priority`, `location`, and `enrichment_error` on `job_postings`; `resume_path` and `cover_letter_path` on `applications`; and `"draft"` and `"ready"` in the applications status CHECK constraint. The migration SQL targets the live database and will work, but `schema.sql` should be updated separately to reflect the true schema.
+
 ## MCP Server Changes
 
 ### `add_job_posting` tool
 
 - Add required `created_by` (string) param
 - Add optional `created_by_reason` (string) param
-- Pass both to the Supabase insert/upsert
+- **Upsert behavior:** On URL conflict (update path), exclude `created_by` and `created_by_reason` from the update payload. These fields are set only on INSERT to preserve the original creator's identity.
 
 ### `submit_application` tool
 
 - Add required `created_by` (string) param
 - Add optional `created_by_reason` (string) param
-- Pass both to the Supabase insert
+- Add optional `resume_created_by` and `cover_letter_created_by` params
+- Validation: if `resume_path` is provided and `resume_created_by` is not, reject with an error. Same for `cover_letter_path` / `cover_letter_created_by`.
+- Pass all to the Supabase insert
 
 ### `update_application` tool
 
 - Add optional `resume_created_by` and `cover_letter_created_by` params
-- Validation: if `resume_path` is set to a non-null value and `resume_created_by` is not provided, reject with an error
-- Same for `cover_letter_path` / `cover_letter_created_by`
+- Validation: if `resume_path` is set to a non-null value and `resume_created_by` is not provided, reject with an error. Same for `cover_letter_path` / `cover_letter_created_by`.
+- **Auto-clear on null:** If `resume_path` is explicitly set to null, automatically set `resume_created_by` to null as well. Same for `cover_letter_path` / `cover_letter_created_by`.
 - Make `created_by`, `created_by_reason`, `resume_created_by`, `cover_letter_created_by` all updatable for correction purposes
 
 ### `search_job_postings` tool
 
 - Include `created_by` and `created_by_reason` in returned data for both postings and applications
+- Include `resume_created_by` and `cover_letter_created_by` in the applications sub-select
 - Add optional `created_by` filter param to query by source
 
 ## Caller Updates
@@ -102,11 +110,20 @@ Writes directly to Supabase. Add to the job_postings upsert:
 
 Only updates existing rows (title, company, location). No changes needed.
 
+### Migration script (`migrate-thoughts-to-jobs.ts`)
+
+Writes directly to Supabase for both `job_postings` and `applications`. Update to include:
+- `created_by: "migration-script"` on all inserts to both tables
+- `resume_created_by: "migration-script"` when setting `resume_path`
+- `cover_letter_created_by: "migration-script"` when setting `cover_letter_path`
+
 ### Gmail sync (scheduled task SKILL.md)
 
 Update prompt to instruct agent to pass:
 - `created_by: "gmail-sync"`
 - `created_by_reason` containing first 120 characters of the email subject, truncated with "..." if needed. Format: `"Application confirmation email: <subject>"`
+
+Also fix pre-existing bug: references to `update_application_status` should be `update_application`.
 
 ### Auto-resume-generator (scheduled task SKILL.md)
 
@@ -117,7 +134,7 @@ Update prompt to pass:
 ### Resume-optimizer agent
 
 Update agent instructions to pass:
-- `resume_created_by: "resume-optimizer"` when setting `resume_path`
+- `resume_created_by: "resume-optimizer"` when setting `resume_path` (via both `submit_application` and `update_application`)
 
 ### Job-applicator agent
 
@@ -127,7 +144,7 @@ Update agent instructions to pass:
 
 ### Job-hunt-mcp skill (guardrails doc)
 
-Update to remind all agents that `created_by` is mandatory on `add_job_posting` and `submit_application`.
+Update to remind all agents that `created_by` is mandatory on `add_job_posting` and `submit_application`, and that `resume_created_by` / `cover_letter_created_by` are required when setting the corresponding paths.
 
 ### Manual conversations
 
@@ -135,12 +152,11 @@ When calling MCP tools directly in conversation, use `created_by: "daniel"`.
 
 ## Deploy Order
 
-1. Run migration SQL (add columns with temporary default, backfill, drop default)
-2. Deploy updated MCP server (`index.ts`)
-3. Deploy updated Slack ingest (`ingest-thought-modified.ts`)
-4. Update agent instructions (resume-optimizer, job-applicator)
-5. Update scheduled task prompts (gmail-sync SKILL.md, auto-resume-generator SKILL.md)
-6. Update job-hunt-mcp skill guardrails
-7. Verify by creating a test posting and application, confirm attribution flows through
+1. Update agent instructions (resume-optimizer, job-applicator) and scheduled task prompts (gmail-sync SKILL.md, auto-resume-generator SKILL.md) and job-hunt-mcp skill guardrails. These are safe to deploy first since the MCP server will simply ignore unknown params until it's updated.
+2. Run migration SQL (add columns with temporary default, backfill, drop default)
+3. Deploy updated MCP server (`index.ts`)
+4. Deploy updated Slack ingest (`ingest-thought-modified.ts`)
+5. Update migration script (`migrate-thoughts-to-jobs.ts`)
+6. Verify by creating a test posting and application, confirm attribution flows through
 
-The MCP server and Slack ingest must be deployed after the migration but before any new records are created. The gmail-sync runs daily at 9 AM and the auto-resume-generator runs hourly, so time the deploy between runs.
+Agent/task prompt updates go first (step 1) so that by the time the MCP server starts requiring `created_by` (step 3), all callers are already passing it. The gmail-sync runs daily at 9 AM and the auto-resume-generator runs hourly, so time steps 2-3 between runs to avoid any window where the MCP requires params that callers aren't sending yet.
