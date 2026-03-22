@@ -225,6 +225,21 @@ async function main() {
         }
       }
 
+      // Log attribution
+      const enrichedFields = Object.keys(updateFields).join(", ");
+      const { error: attrErr } = await supabase
+        .from("attribution_log")
+        .insert({
+          entity_type: "job_posting",
+          entity_id: posting.id,
+          action: "enriched",
+          actor: "enrichment-cron",
+          reason: `Scraped from LinkedIn: ${enrichedFields}`,
+        });
+      if (attrErr) {
+        console.warn(`Attribution log failed for ${posting.id}: ${attrErr.message}`);
+      }
+
       console.log(`Enriched: ${details.title ?? "?"} at ${details.company ?? "?"} — ${posting.url}`);
       enrichedCount++;
 
@@ -241,6 +256,13 @@ async function main() {
       if (markErr) {
         console.error(`Failed to record enrichment_error for ${posting.id}: ${markErr.message}`);
       }
+      await supabase.from("attribution_log").insert({
+        entity_type: "job_posting",
+        entity_id: posting.id,
+        action: "enrichment_failed",
+        actor: "enrichment-cron",
+        reason: msg.slice(0, 500),
+      });
       console.error(`Failed to enrich ${posting.url}: ${msg}`);
       failedCount++;
     }
