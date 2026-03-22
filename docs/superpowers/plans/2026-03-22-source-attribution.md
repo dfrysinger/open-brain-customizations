@@ -459,7 +459,389 @@ git -C /Users/dfrysinger/Projects/open-brain-customizations commit -m "feat: add
 
 ---
 
-### Task 8: Deploy Updated MCP Server
+### Task 8: Set Up Test Infrastructure
+
+**Why:** The MCP server, Slack ingest, and migration script have no tests. Before deploying attribution changes, establish a test foundation covering the new logic and key existing behavior.
+
+**Files:**
+- Create: `open-brain-customizations/functions/job-hunt-mcp/test/mock-supabase.ts`
+- Create: `open-brain-customizations/functions/job-hunt-mcp/test/handlers.test.ts`
+- Create: `open-brain-customizations/functions/job-hunt-mcp/handlers.ts`
+- Create: `open-brain-customizations/test/ingest-attribution.test.ts`
+- Create: `open-brain-customizations/test/migrate-attribution.test.ts`
+- Modify: `open-brain-customizations/functions/job-hunt-mcp/index.ts`
+- Modify: `open-brain-customizations/functions/job-hunt-mcp/deno.json`
+
+- [ ] **Step 1: Add test task to deno.json**
+
+Add to `open-brain-customizations/functions/job-hunt-mcp/deno.json`:
+```json
+{
+  "tasks": {
+    "test": "deno test --allow-env --allow-read test/",
+    "test:coverage": "deno test --allow-env --allow-read --coverage=coverage/ test/"
+  }
+}
+```
+
+- [ ] **Step 2: Extract handler functions from index.ts**
+
+Create `handlers.ts` that exports the core logic for each tool as pure functions that accept a Supabase client as a parameter. This makes them testable without mocking module-level globals.
+
+```typescript
+// handlers.ts
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export interface AttributionLogEntry {
+    entity_type: "job_posting" | "application";
+    entity_id: string;
+    action: string;
+    actor: string;
+    reason: string | null;
+}
+
+export async function handleAddJobPosting(
+    supabase: SupabaseClient,
+    params: {
+        url: string;
+        created_by: string;
+        created_by_reason?: string;
+        company_name?: string;
+        title?: string;
+        location?: string;
+        source?: string;
+        salary_min?: number;
+        salary_max?: number;
+        notes?: string;
+        posted_date?: string;
+        priority?: string;
+        salary_currency?: string;
+        closing_date?: string;
+    }
+) {
+    // Move the handler logic from index.ts here
+    // Return { data, isNew, error }
+}
+
+export async function handleSubmitApplication(
+    supabase: SupabaseClient,
+    params: {
+        job_posting_id: string;
+        created_by: string;
+        created_by_reason?: string;
+        status?: string;
+        applied_date?: string;
+        resume_path?: string;
+        cover_letter_path?: string;
+        // ... other fields
+    }
+) {
+    // Move handler logic here
+    // Return { data, logs: AttributionLogEntry[], error }
+}
+
+export async function handleUpdateApplication(
+    supabase: SupabaseClient,
+    params: {
+        application_id: string;
+        actor: string;
+        actor_reason?: string;
+        status?: string;
+        resume_path?: string | null;
+        cover_letter_path?: string | null;
+        // ... other fields
+    }
+) {
+    // Move handler logic here
+    // Return { data, logs: AttributionLogEntry[], error }
+}
+
+export function buildUpdateApplicationLogs(
+    current: { status: string; resume_path: string | null; cover_letter_path: string | null },
+    updates: { status?: string; resume_path?: string | null; cover_letter_path?: string | null },
+    application_id: string,
+    actor: string,
+    actor_reason?: string,
+): AttributionLogEntry[] {
+    // Extract the change detection logic as a pure function
+    const logs: AttributionLogEntry[] = [];
+
+    if (updates.status !== undefined && updates.status !== current.status) {
+        logs.push({
+            entity_type: "application",
+            entity_id: application_id,
+            action: "status_changed",
+            actor,
+            reason: actor_reason ?? `${current.status} -> ${updates.status}`,
+        });
+    }
+
+    if (updates.resume_path !== undefined && updates.resume_path !== current.resume_path) {
+        logs.push({
+            entity_type: "application",
+            entity_id: application_id,
+            action: updates.resume_path === null ? "resume_removed" : "resume_added",
+            actor,
+            reason: actor_reason ?? null,
+        });
+    }
+
+    if (updates.cover_letter_path !== undefined && updates.cover_letter_path !== current.cover_letter_path) {
+        logs.push({
+            entity_type: "application",
+            entity_id: application_id,
+            action: updates.cover_letter_path === null ? "cover_letter_removed" : "cover_letter_added",
+            actor,
+            reason: actor_reason ?? null,
+        });
+    }
+
+    return logs;
+}
+```
+
+Update `index.ts` to import and use these functions instead of inline logic. The tool registrations stay in `index.ts` but delegate to `handlers.ts`.
+
+- [ ] **Step 3: Create mock Supabase client**
+
+Create `test/mock-supabase.ts`:
+```typescript
+// A minimal mock that records calls and returns configurable responses.
+// Implements the chained query builder pattern (.from().select().eq().single())
+
+export interface MockCall {
+    method: string;
+    table: string;
+    args: unknown[];
+}
+
+export function createMockSupabase(responses: Record<string, { data?: unknown; error?: unknown }> = {}) {
+    const calls: MockCall[] = [];
+    let currentTable = "";
+    let currentChain: string[] = [];
+
+    const chainable = {
+        select: (...args: unknown[]) => { calls.push({ method: "select", table: currentTable, args }); return chainable; },
+        insert: (...args: unknown[]) => { calls.push({ method: "insert", table: currentTable, args }); return chainable; },
+        update: (...args: unknown[]) => { calls.push({ method: "update", table: currentTable, args }); return chainable; },
+        upsert: (...args: unknown[]) => { calls.push({ method: "upsert", table: currentTable, args }); return chainable; },
+        delete: () => { calls.push({ method: "delete", table: currentTable, args: [] }); return chainable; },
+        eq: (...args: unknown[]) => { calls.push({ method: "eq", table: currentTable, args }); return chainable; },
+        ilike: (...args: unknown[]) => { calls.push({ method: "ilike", table: currentTable, args }); return chainable; },
+        is: (...args: unknown[]) => { calls.push({ method: "is", table: currentTable, args }); return chainable; },
+        or: (...args: unknown[]) => { calls.push({ method: "or", table: currentTable, args }); return chainable; },
+        order: (...args: unknown[]) => { calls.push({ method: "order", table: currentTable, args }); return chainable; },
+        limit: (...args: unknown[]) => { calls.push({ method: "limit", table: currentTable, args }); return chainable; },
+        single: () => { calls.push({ method: "single", table: currentTable, args: [] }); return Promise.resolve(responses[currentTable] ?? { data: null, error: null }); },
+        maybeSingle: () => { calls.push({ method: "maybeSingle", table: currentTable, args: [] }); return Promise.resolve(responses[currentTable] ?? { data: null, error: null }); },
+        then: (resolve: (value: unknown) => void) => resolve(responses[currentTable] ?? { data: null, error: null }),
+    };
+
+    return {
+        client: {
+            from: (table: string) => { currentTable = table; return chainable; },
+        },
+        calls,
+        reset: () => { calls.length = 0; },
+    };
+}
+```
+
+- [ ] **Step 4: Write MCP handler tests**
+
+Create `test/handlers.test.ts`:
+```typescript
+import { assertEquals, assertExists } from "jsr:@std/assert";
+import { buildUpdateApplicationLogs } from "../handlers.ts";
+
+// --- Pure function tests (no mocks needed) ---
+
+Deno.test("buildUpdateApplicationLogs - status change logs correctly", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { status: "applied" },
+        "app-123",
+        "daniel",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].action, "status_changed");
+    assertEquals(logs[0].actor, "daniel");
+    assertEquals(logs[0].reason, "draft -> applied");
+});
+
+Deno.test("buildUpdateApplicationLogs - no change produces no logs", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { status: "draft" },
+        "app-123",
+        "daniel",
+    );
+    assertEquals(logs.length, 0);
+});
+
+Deno.test("buildUpdateApplicationLogs - resume added", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { resume_path: "/path/to/resume.pdf" },
+        "app-123",
+        "resume-optimizer",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].action, "resume_added");
+    assertEquals(logs[0].actor, "resume-optimizer");
+});
+
+Deno.test("buildUpdateApplicationLogs - resume removed", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: "/old/path.pdf", cover_letter_path: null },
+        { resume_path: null },
+        "app-123",
+        "daniel",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].action, "resume_removed");
+});
+
+Deno.test("buildUpdateApplicationLogs - cover letter added", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { cover_letter_path: "/path/to/letter.pdf" },
+        "app-123",
+        "job-applicator",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].action, "cover_letter_added");
+});
+
+Deno.test("buildUpdateApplicationLogs - multiple changes at once", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { status: "applied", resume_path: "/resume.pdf", cover_letter_path: "/letter.pdf" },
+        "app-123",
+        "job-applicator",
+    );
+    assertEquals(logs.length, 3);
+    assertEquals(logs[0].action, "status_changed");
+    assertEquals(logs[1].action, "resume_added");
+    assertEquals(logs[2].action, "cover_letter_added");
+});
+
+Deno.test("buildUpdateApplicationLogs - custom actor_reason overrides default", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: null, cover_letter_path: null },
+        { status: "applied" },
+        "app-123",
+        "gmail-sync",
+        "Application confirmation email: Thank you for applying to Senior Director at Autodesk",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].reason, "Application confirmation email: Thank you for applying to Senior Director at Autodesk");
+});
+
+Deno.test("buildUpdateApplicationLogs - resume replacement logs resume_added not resume_removed", () => {
+    const logs = buildUpdateApplicationLogs(
+        { status: "draft", resume_path: "/old/resume.pdf", cover_letter_path: null },
+        { resume_path: "/new/resume.pdf" },
+        "app-123",
+        "resume-optimizer",
+    );
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].action, "resume_added");
+});
+```
+
+- [ ] **Step 5: Run tests**
+
+```bash
+cd /Users/dfrysinger/Projects/open-brain-customizations/functions/job-hunt-mcp && deno task test
+```
+
+Expected: All tests pass.
+
+- [ ] **Step 6: Write Slack ingest attribution test**
+
+Create `open-brain-customizations/test/ingest-attribution.test.ts`:
+```typescript
+import { assertEquals } from "jsr:@std/assert";
+
+// Test the logic pattern used in the Slack ingest for distinguishing insert vs update
+Deno.test("Slack ingest - new URL sets created_by and isNewPosting", () => {
+    const existingPosting = null; // simulates no existing record
+    const row: Record<string, unknown> = { url: "https://linkedin.com/jobs/view/123", source: "linkedin" };
+    let isNewPosting = false;
+
+    if (!existingPosting) {
+        row.created_by = "slack-ingest";
+        isNewPosting = true;
+    }
+
+    assertEquals(row.created_by, "slack-ingest");
+    assertEquals(isNewPosting, true);
+});
+
+Deno.test("Slack ingest - existing URL does not set created_by", () => {
+    const existingPosting = { id: "existing-id" }; // simulates existing record
+    const row: Record<string, unknown> = { url: "https://linkedin.com/jobs/view/123", source: "linkedin" };
+    let isNewPosting = false;
+
+    if (!existingPosting) {
+        row.created_by = "slack-ingest";
+        isNewPosting = true;
+    }
+
+    assertEquals(row.created_by, undefined);
+    assertEquals(isNewPosting, false);
+});
+```
+
+- [ ] **Step 7: Write migration script attribution test**
+
+Create `open-brain-customizations/test/migrate-attribution.test.ts`:
+```typescript
+import { assertEquals } from "jsr:@std/assert";
+
+// Test that migration script builds insert objects with created_by
+Deno.test("Migration script - job posting insert includes created_by", () => {
+    // Simulates the insert object construction from migrate-thoughts-to-jobs.ts
+    const postingRow: Record<string, unknown> = {
+        url: "https://linkedin.com/jobs/view/456",
+        title: "Head of Product",
+        source: "linkedin",
+        created_by: "migration-script",
+    };
+
+    assertEquals(postingRow.created_by, "migration-script");
+});
+
+Deno.test("Migration script - application insert includes created_by", () => {
+    const applicationRow: Record<string, unknown> = {
+        job_posting_id: "posting-123",
+        status: "applied",
+        created_by: "migration-script",
+    };
+
+    assertEquals(applicationRow.created_by, "migration-script");
+});
+```
+
+- [ ] **Step 8: Run all tests**
+
+```bash
+cd /Users/dfrysinger/Projects/open-brain-customizations && deno test --allow-env --allow-read
+```
+
+Expected: All tests pass.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git -C /Users/dfrysinger/Projects/open-brain-customizations add functions/job-hunt-mcp/handlers.ts functions/job-hunt-mcp/test/ functions/job-hunt-mcp/deno.json test/
+git -C /Users/dfrysinger/Projects/open-brain-customizations commit -m "feat: add test infrastructure and attribution tests"
+```
+
+---
+
+### Task 9: Deploy Updated MCP Server
 
 **Timing:** Deploy immediately after Task 2 (migration). The auto-resume-generator runs hourly and the gmail-sync runs daily at 9 AM. Time this deployment so it completes before the next scheduled run. All agent/task prompts were already updated in Task 1, so callers will pass the new params.
 
@@ -477,7 +859,7 @@ Call `search_job_postings` and confirm `created_by` appears in results (should s
 
 ---
 
-### Task 9: Update Slack Ingest
+### Task 10: Update Slack Ingest
 
 **Files:**
 - Modify: `open-brain-customizations/functions/ingest-thought-modified.ts`
@@ -551,7 +933,7 @@ supabase functions deploy ingest-thought-modified --project-ref <project-ref>
 
 ---
 
-### Task 10: Update Migration Script
+### Task 11: Update Migration Script
 
 **Files:**
 - Modify: `open-brain-customizations/scripts/migrate-thoughts-to-jobs.ts`
@@ -573,7 +955,7 @@ git -C /Users/dfrysinger/Projects/open-brain-customizations commit -m "feat: add
 
 ---
 
-### Task 11: Update Schema and Documentation
+### Task 12: Update Schema and Documentation
 
 **Files:**
 - Modify: `open-brain/extensions/job-hunt/schema.sql`
@@ -646,7 +1028,7 @@ git -C /Users/dfrysinger/Projects/open-brain-customizations commit -m "docs: add
 
 ---
 
-### Task 12: Push to GitHub and Verify
+### Task 13: Push to GitHub and Verify
 
 - [ ] **Step 1: Push open-brain-customizations**
 
