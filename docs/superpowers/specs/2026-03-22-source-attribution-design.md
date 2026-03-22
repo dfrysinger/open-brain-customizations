@@ -197,6 +197,41 @@ Update to remind all agents that:
 
 When calling MCP tools directly in conversation, use `created_by: "daniel"` or `actor: "daniel"`.
 
+## Documentation and Schema Updates
+
+### `schema.sql` (`open-brain/extensions/job-hunt/schema.sql`)
+
+Update to reflect the true live schema, including:
+- The new `created_by` columns on `job_postings` and `applications`
+- The new `attribution_log` table with RLS policy and index
+- Pre-existing missing columns: `priority`, `location`, `enrichment_error` on `job_postings`; `resume_path`, `cover_letter_path` on `applications`
+- Updated status CHECK constraint to include `"draft"` and `"ready"`
+
+### `metadata.json` (`open-brain/extensions/job-hunt/metadata.json`)
+
+Update version and description to reflect the attribution feature.
+
+### `README.md` (`open-brain/extensions/job-hunt/README.md`)
+
+Update to document:
+- The `created_by` field and its purpose
+- The `attribution_log` table and action types
+- The `get_attribution_history` tool
+- The list of known source identifiers
+
+### `open-brain-customizations` README
+
+Update to document:
+- The new attribution_log table
+- Any new or changed MCP tool params (`created_by`, `actor`, `created_by_reason`, `actor_reason`)
+- The `get_attribution_history` tool
+
+### GitHub repo
+
+Push all changes to both repos:
+- `open-brain` (schema.sql, metadata.json, README)
+- `open-brain-customizations` (MCP server, Slack ingest, migration script, scheduled tasks, specs)
+
 ## Deploy Order
 
 1. Update agent instructions (resume-optimizer, job-applicator) and scheduled task prompts (gmail-sync SKILL.md, auto-resume-generator SKILL.md) and job-hunt-mcp skill guardrails. These are safe to deploy first since the MCP server will simply ignore unknown params until it's updated.
@@ -204,6 +239,8 @@ When calling MCP tools directly in conversation, use `created_by: "daniel"` or `
 3. Deploy updated MCP server (`index.ts`)
 4. Deploy updated Slack ingest (`ingest-thought-modified.ts`)
 5. Update migration script (`migrate-thoughts-to-jobs.ts`)
-6. Verify by creating a test posting and application, confirm attribution flows through and log entries appear
+6. Update schema.sql, metadata.json, and READMEs in both repos
+7. Push to GitHub
+8. Verify by creating a test posting and application, confirm attribution flows through and log entries appear
 
 Agent/task prompt updates go first (step 1) so that by the time the MCP server starts requiring `created_by` (step 3), all callers are already passing it. The gmail-sync runs daily at 9 AM and the auto-resume-generator runs hourly, so time steps 2-3 between runs to avoid any window where the MCP requires params that callers aren't sending yet.
