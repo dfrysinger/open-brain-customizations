@@ -5,6 +5,7 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
+import { buildUpdateApplicationLogs } from "./handlers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -360,18 +361,17 @@ server.registerTool(
       }
 
       // Log attribution for changes
-      const logs: Record<string, unknown>[] = [];
-      if (status !== undefined && current && status !== current.status) {
-        logs.push({ entity_type: "application", entity_id: application_id, action: "status_changed", actor, reason: actor_reason ?? `${current.status} -> ${status}` });
-      }
-      if (resume_path !== undefined && resume_path !== current?.resume_path) {
-        logs.push({ entity_type: "application", entity_id: application_id, action: resume_path === null ? "resume_removed" : "resume_added", actor, reason: actor_reason ?? null });
-      }
-      if (cover_letter_path !== undefined && cover_letter_path !== current?.cover_letter_path) {
-        logs.push({ entity_type: "application", entity_id: application_id, action: cover_letter_path === null ? "cover_letter_removed" : "cover_letter_added", actor, reason: actor_reason ?? null });
-      }
-      if (logs.length > 0) {
-        await supabase.from("attribution_log").insert(logs);
+      if (current) {
+        const logs = buildUpdateApplicationLogs(
+          current,
+          { status, resume_path, cover_letter_path },
+          application_id,
+          actor,
+          actor_reason,
+        );
+        if (logs.length > 0) {
+          await supabase.from("attribution_log").insert(logs);
+        }
       }
 
       return {

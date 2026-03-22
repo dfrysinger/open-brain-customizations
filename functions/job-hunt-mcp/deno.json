@@ -1,4 +1,8 @@
 {
+  "tasks": {
+    "test": "deno test --allow-env --allow-read test/",
+    "test:coverage": "deno test --allow-env --allow-read --coverage=coverage/ test/"
+  },
   "imports": {
     "@hono/mcp": "npm:@hono/mcp@0.1.1",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@1.24.3",
