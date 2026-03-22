@@ -100,8 +100,7 @@ async function main() {
   try {
     browser = await chromium.launchPersistentContext(tempDir, {
       executablePath: CHROME_PATH,
-      headless: false,
-      args: ["--headless=new"],
+      headless: true,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
