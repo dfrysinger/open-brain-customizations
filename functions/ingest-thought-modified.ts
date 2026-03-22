@@ -142,22 +142,61 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
       }
 
-      // Upsert job posting (URL is unique)
+      // Check-then-insert/update job posting (URL is unique)
       const row: Record<string, unknown> = { url: jobUrl, source: "linkedin" };
       if (company_id != null) row.company_id = company_id;
       if (title != null) row.title = title;
       if (location != null) row.location = location;
 
-      const { data: jobPosting, error: jpError } = await supabase
-        .from("job_postings")
-        .upsert(row, { onConflict: "url" })
-        .select()
-        .single();
+      // Check if posting already exists
+      const { data: existingPosting } = await supabase
+          .from("job_postings")
+          .select("id")
+          .eq("url", jobUrl)
+          .maybeSingle();
 
-      if (jpError) {
-        console.error("Job posting upsert error:", jpError);
-        await replyInSlack(channel, messageTs, "Failed to save job link — internal error.");
-        return new Response("error", { status: 500 });
+      let jobPosting;
+      let isNewPosting = false;
+
+      if (existingPosting) {
+          // Update existing - don't overwrite created_by
+          const { data, error: updateErr } = await supabase
+              .from("job_postings")
+              .update(row)
+              .eq("id", existingPosting.id)
+              .select()
+              .single();
+          if (updateErr) {
+              console.error("Job posting update error:", updateErr);
+              await replyInSlack(channel, messageTs, "Failed to save job link — internal error.");
+              return new Response("error", { status: 500 });
+          }
+          jobPosting = data;
+      } else {
+          // Insert new - include created_by
+          row.created_by = "slack-ingest";
+          const { data, error: insertErr } = await supabase
+              .from("job_postings")
+              .insert(row)
+              .select()
+              .single();
+          if (insertErr) {
+              console.error("Job posting insert error:", insertErr);
+              await replyInSlack(channel, messageTs, "Failed to save job link — internal error.");
+              return new Response("error", { status: 500 });
+          }
+          jobPosting = data;
+          isNewPosting = true;
+      }
+
+      if (isNewPosting && jobPosting) {
+          await supabase.from("attribution_log").insert({
+              entity_type: "job_posting",
+              entity_id: jobPosting.id,
+              action: "created",
+              actor: "slack-ingest",
+              reason: "LinkedIn URL shared in Slack channel",
+          });
       }
 
       // Reply with confirmation
