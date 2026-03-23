@@ -137,11 +137,11 @@ export async function fetchPipelineStats(supabase: SupabaseClient): Promise<Pipe
   const staleApplications = await fetchStaleApplications(supabase);
 
   // --- Win tracking ---
+  // Count applications in interviewing or screening status
   const { count: activeInterviews } = await supabase
-    .from("interviews")
+    .from("applications")
     .select("*", { count: "exact", head: true })
-    .in("status", ["scheduled", "completed"])
-    .gte("scheduled_at", offsetDate(today, -30));
+    .in("status", ["interviewing", "screening"]);
 
   const { count: applicationsOut } = await supabase
     .from("applications")

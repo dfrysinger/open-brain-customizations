@@ -9,7 +9,7 @@ const TRACK_LABELS: Record<string, string> = {
   resume_review: "Resume Review",
   contact_discovery: "Contact Discovery",
   outreach: "Outreach",
-  application_submission: "Applications Submitted",
+  application_submission: "Submit Applications",
 };
 
 export interface MessagePayload {
