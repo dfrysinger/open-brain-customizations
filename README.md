@@ -140,6 +140,75 @@ The `open-brain` repo has two remotes:
 - `origin` points to `dfrysinger/OB1` (push here)
 - `upstream` points to `NateBJones-Projects/OB1` (pull updates from here with `git fetch upstream`)
 
+## Networking Pipeline Tools
+
+The `job-hunt-mcp` server includes 8 tools for managing networking contacts alongside job postings.
+
+### Schema additions
+
+#### `job_contacts` table
+
+Stores contacts associated with job postings.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `name` | TEXT | Contact's full name |
+| `company_id` | UUID | FK to `companies` |
+| `role` | TEXT | Contact's job title (optional) |
+| `linkedin_url` | TEXT | LinkedIn profile URL (optional) |
+| `notes` | TEXT | Free-text notes (optional) |
+| `created_by` | TEXT | Actor that created the record |
+| `created_at` | TIMESTAMPTZ | When the record was created |
+
+#### `posting_contacts` junction table
+
+Links contacts to job postings with a relationship type.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `job_posting_id` | UUID | FK to `job_postings` |
+| `job_contact_id` | UUID | FK to `job_contacts` |
+| `relationship` | TEXT | Relationship enum value (see below) |
+| `created_at` | TIMESTAMPTZ | When the link was created |
+
+**Relationship enum values:** `colleague`, `hiring_manager`, `confirmed_recruiter`, `recruiter`, `recruiting_lead`, `network`, `mutual_intro`, `employee`, `executive`
+
+#### New columns on `job_postings`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `connection_count` | INTEGER | Number of known contacts at the company |
+| `networking_status` | TEXT | One of: `not_started`, `researched`, `outreach_in_progress`, `done` |
+
+#### `daily_stats` table
+
+Tracks daily progress toward job-hunt activity targets.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `date` | DATE | The calendar date |
+| `track` | TEXT | Category being tracked (e.g., `applications`, `outreach`) |
+| `completed` | INTEGER | Count of completed items for the day |
+| `target` | INTEGER | Daily target count |
+| `deficit` | INTEGER | `target - completed` (can be negative if ahead) |
+| `created_at` | TIMESTAMPTZ | When the row was recorded |
+
+### MCP tools
+
+| Tool | Required params | Description |
+|------|----------------|-------------|
+| `add_job_contact` | `name`, `company_id`, `created_by` | Create a contact; optionally link to a posting with a relationship type |
+| `search_job_contacts` | — | Find contacts by company, posting, role, or text search |
+| `update_job_contact` | `job_contact_id`, `actor` | Update fields on an existing contact |
+| `delete_job_contact` | `job_contact_id`, `actor` | Delete a contact and cascade-remove all posting links |
+| `link_contact_to_posting` | `job_contact_id`, `job_posting_id`, `relationship` | Link a contact to a posting with a relationship type |
+| `unlink_contact_from_posting` | `job_contact_id`, `job_posting_id` | Remove a contact-posting link without deleting the contact |
+| `update_job_posting` | `job_posting_id`, `actor` | Update posting fields including `networking_status` and `connection_count` |
+| `get_networking_queue` | — | Pipeline management query; returns postings grouped by networking status with contact counts |
+
 ## Open Brain MCP Customizations
 
 The `open-brain-mcp` function has been modified from the upstream version:
