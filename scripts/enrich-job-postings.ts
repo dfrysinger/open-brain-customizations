@@ -153,10 +153,7 @@ async function main() {
           }
 
           // Check for "People you can reach out to" section
-          const bodyText = document.body.innerText;
-          const hasNetworkConnections = bodyText.includes("People you can reach out to")
-            || bodyText.includes("in your network")
-            || bodyText.includes("connections work here");
+          const hasNetworkConnections = document.body.innerText.includes("People you can reach out to");
 
           // Recruiter / hirer card
           const hirerCard = document.querySelector(".hirer-card__hirer-information")
