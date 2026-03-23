@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS job_postings (
     closing_date DATE,
     priority TEXT DEFAULT 'medium' CHECK (priority IN ('high', 'medium', 'low') OR priority IS NULL),
     enrichment_error TEXT,
-    created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    -- Added by 20260323000000_networking_pipeline migration:
+    connection_count INTEGER,
+    networking_status TEXT DEFAULT 'not_started'
+        CHECK (networking_status IN ('not_started', 'researched', 'outreach_in_progress', 'done'))
 );
 
 -- Table: applications
@@ -91,6 +95,36 @@ CREATE TABLE IF NOT EXISTS job_contacts (
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
+-- Table: posting_contacts
+-- Junction table linking contacts to specific job postings (added by 20260323000000_networking_pipeline)
+CREATE TABLE IF NOT EXISTS posting_contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_posting_id UUID NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+    job_contact_id UUID NOT NULL REFERENCES job_contacts(id) ON DELETE CASCADE,
+    relationship TEXT NOT NULL CHECK (relationship IN (
+        'colleague', 'hiring_manager', 'confirmed_recruiter', 'recruiter',
+        'recruiting_lead', 'network', 'mutual_intro', 'employee', 'executive'
+    )),
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    UNIQUE (job_posting_id, job_contact_id)
+);
+
+-- Table: daily_stats
+-- Daily tracking of job hunt activity targets and streaks (added by 20260323000000_networking_pipeline)
+CREATE TABLE IF NOT EXISTS daily_stats (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    date DATE NOT NULL,
+    track TEXT NOT NULL CHECK (track IN (
+        'resume_creation', 'resume_review', 'contact_discovery',
+        'outreach', 'application_submission'
+    )),
+    completed INTEGER NOT NULL DEFAULT 0,
+    target INTEGER NOT NULL DEFAULT 5,
+    deficit INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    UNIQUE (date, track)
+);
+
 -- Indexes for efficient querying
 CREATE INDEX IF NOT EXISTS idx_job_postings_company_id
     ON job_postings(company_id);
@@ -108,12 +142,20 @@ CREATE INDEX IF NOT EXISTS idx_interviews_scheduled
     ON interviews(scheduled_at)
     WHERE scheduled_at IS NOT NULL;
 
+-- Indexes for posting_contacts (added by 20260323000000_networking_pipeline)
+CREATE INDEX IF NOT EXISTS idx_posting_contacts_posting
+    ON posting_contacts(job_posting_id);
+CREATE INDEX IF NOT EXISTS idx_posting_contacts_contact
+    ON posting_contacts(job_contact_id);
+
 -- Row Level Security (RLS)
 ALTER TABLE companies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_postings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE interviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE posting_contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_stats ENABLE ROW LEVEL SECURITY;
 
 -- Function to automatically update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
