@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     enrichment_error TEXT,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
     -- Added by 20260323000000_networking_pipeline migration:
-    connection_count INTEGER,
+    has_network_connections BOOLEAN,
     networking_status TEXT DEFAULT 'not_started'
         CHECK (networking_status IN ('not_started', 'researched', 'outreach_in_progress', 'done'))
 );

@@ -179,7 +179,7 @@ Links contacts to job postings with a relationship type.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `connection_count` | INTEGER | Number of known contacts at the company |
+| `has_network_connections` | BOOLEAN | Whether LinkedIn showed "People you can reach out to" on this posting |
 | `networking_status` | TEXT | One of: `not_started`, `researched`, `outreach_in_progress`, `done` |
 
 #### `daily_stats` table
@@ -206,7 +206,7 @@ Tracks daily progress toward job-hunt activity targets.
 | `delete_job_contact` | `job_contact_id`, `actor` | Delete a contact and cascade-remove all posting links |
 | `link_contact_to_posting` | `job_contact_id`, `job_posting_id`, `relationship` | Link a contact to a posting with a relationship type |
 | `unlink_contact_from_posting` | `job_contact_id`, `job_posting_id` | Remove a contact-posting link without deleting the contact |
-| `update_job_posting` | `job_posting_id`, `actor` | Update posting fields including `networking_status` and `connection_count` |
+| `update_job_posting` | `job_posting_id`, `actor` | Update posting fields including `networking_status` and `has_network_connections` |
 | `get_networking_queue` | — | Pipeline management query; returns postings grouped by networking status with contact counts |
 
 ## Open Brain MCP Customizations
