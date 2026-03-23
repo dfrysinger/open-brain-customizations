@@ -9,9 +9,7 @@ import { sendSlackMessage, getCaptureChannel } from "../lib/slack.ts";
 
 // --- Config ---
 const CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-// Use a separate temp directory with cookies copied from the main profile.
-// This avoids the ProcessSingleton lock when Chrome is already running.
-const CHROME_SOURCE_PROFILE = `${Deno.env.get("HOME")}/Library/Application Support/Google/Chrome`;
+const AUTH_STATE_PATH = `${Deno.env.get("HOME")}/.playwright-auth.json`;
 const DELAY_MIN_MS = 5000;
 const DELAY_MAX_MS = 15000;
 
@@ -51,7 +49,7 @@ async function main() {
   const { data: postings, error } = await supabase
     .from("job_postings")
     .select("id, url, source")
-    .or("title.is.null,company_id.is.null,connection_count.is.null")
+    .or("title.is.null,company_id.is.null,has_network_connections.is.null")
     .is("enrichment_error", null);
 
   if (error) {
@@ -67,40 +65,23 @@ async function main() {
 
   console.log(`Found ${postings.length} posting(s) to enrich.`);
 
-  // Create a temp profile with cookies copied from the main Chrome profile.
-  // This avoids the ProcessSingleton lock when Chrome is already running.
+  // Launch browser with saved auth state from job-applicator sessions
   const tempDir = await Deno.makeTempDir({ prefix: "enrich-chrome-" });
-  const defaultDir = `${tempDir}/Default`;
-  await Deno.mkdir(defaultDir, { recursive: true });
-  try {
-    // Copy cookies and login state from main profile
-    for (const file of ["Cookies", "Login Data", "Web Data", "Local State"]) {
-      try {
-        await Deno.copyFile(`${CHROME_SOURCE_PROFILE}/Default/${file}`, `${defaultDir}/${file}`);
-      } catch (err) {
-        if (!(err instanceof Deno.errors.NotFound)) {
-          console.warn(`Warning: failed to copy ${file}: ${err instanceof Error ? err.message : err}`);
-        }
-      }
-    }
-    // Copy Local State to profile root (Chrome needs it there)
-    try {
-      await Deno.copyFile(`${CHROME_SOURCE_PROFILE}/Local State`, `${tempDir}/Local State`);
-    } catch (err) {
-      if (!(err instanceof Deno.errors.NotFound)) {
-        console.warn(`Warning: failed to copy Local State: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-  } catch (err) {
-    console.error("Failed to copy Chrome profile cookies:", err);
-  }
-
-  // Launch browser with the temp profile
   let browser;
   try {
+    // Check if auth state file exists
+    let storageState: string | undefined;
+    try {
+      await Deno.stat(AUTH_STATE_PATH);
+      storageState = AUTH_STATE_PATH;
+    } catch {
+      console.warn("No saved auth state found at", AUTH_STATE_PATH);
+    }
+
     browser = await chromium.launchPersistentContext(tempDir, {
       executablePath: CHROME_PATH,
       headless: true,
+      ...(storageState ? { storageState } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -126,9 +107,24 @@ async function main() {
       if (currentUrl.includes("/login") || currentUrl.includes("/authwall")) {
         sessionExpired = true;
         await sendSlackMessage(channel,
-          "LinkedIn session expired — please log in to Chrome and the enrichment will resume tomorrow.");
+          "LinkedIn session expired — please log in via the job-applicator agent to refresh auth state.");
         await page.close();
         break;
+      }
+
+      // Redirect check: skip pages that redirected away from the job posting
+      if (!currentUrl.includes("/jobs/view/")) {
+        console.warn(`Skipping ${posting.url} — redirected to ${currentUrl}`);
+        const { error: skipErr } = await supabase
+          .from("job_postings")
+          .update({ enrichment_error: `Redirected to non-job page: ${currentUrl.slice(0, 200)}` })
+          .eq("id", posting.id);
+        if (skipErr) {
+          console.error(`Update failed for ${posting.id}: ${skipErr.message}`);
+        }
+        await page.close();
+        failedCount++;
+        continue;
       }
 
       // Extract job details from the page
@@ -156,9 +152,11 @@ async function main() {
             }
           }
 
-          // Connection count — look for "N connections work here" or "N connection works here"
-          const connMatch = document.body.innerText.match(/(\d+)\s+connections?\s+work/i);
-          const connectionCount: number | null = connMatch ? parseInt(connMatch[1], 10) : null;
+          // Check for "People you can reach out to" section
+          const bodyText = document.body.innerText;
+          const hasNetworkConnections = bodyText.includes("People you can reach out to")
+            || bodyText.includes("in your network")
+            || bodyText.includes("connections work here");
 
           // Recruiter / hirer card
           const hirerCard = document.querySelector(".hirer-card__hirer-information")
@@ -188,10 +186,10 @@ async function main() {
             }
           }
 
-          return { title: titleFromPage, company: companyFromPage, location, connectionCount, recruiterName, recruiterTitle, recruiterUrl };
+          return { title: titleFromPage, company: companyFromPage, location, hasNetworkConnections, recruiterName, recruiterTitle, recruiterUrl };
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("page.evaluate timed out after 15s")), 15000))
-      ]) as { title: string | null; company: string | null; location: string | null; connectionCount: number | null; recruiterName: string | null; recruiterTitle: string | null; recruiterUrl: string | null };
+      ]) as { title: string | null; company: string | null; location: string | null; hasNetworkConnections: boolean; recruiterName: string | null; recruiterTitle: string | null; recruiterUrl: string | null };
 
       await page.close();
 
@@ -244,7 +242,7 @@ async function main() {
       if (details.title) updateFields.title = details.title;
       if (company_id) updateFields.company_id = company_id;
       if (details.location) updateFields.location = details.location;
-      if (details.connectionCount != null) updateFields.connection_count = details.connectionCount;
+      updateFields.has_network_connections = details.hasNetworkConnections;
 
       if (Object.keys(updateFields).length > 0) {
         const { error: updateErr } = await supabase
@@ -321,7 +319,7 @@ async function main() {
         if (contactId) {
           const { error: linkErr } = await supabase
             .from("posting_contacts")
-            .insert({ posting_id: posting.id, contact_id: contactId, relationship: "recruiter" });
+            .insert({ job_posting_id: posting.id, job_contact_id: contactId, relationship: "recruiter" });
           if (linkErr && linkErr.code !== "23505") {
             console.warn(`posting_contacts insert failed for posting ${posting.id} / contact ${contactId}: ${linkErr.message}`);
           }
