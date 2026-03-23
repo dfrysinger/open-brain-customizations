@@ -51,7 +51,7 @@ async function main() {
   const { data: postings, error } = await supabase
     .from("job_postings")
     .select("id, url, source")
-    .or("title.is.null,company_id.is.null")
+    .or("title.is.null,company_id.is.null,connection_count.is.null")
     .is("enrichment_error", null);
 
   if (error) {
@@ -156,10 +156,42 @@ async function main() {
             }
           }
 
-          return { title: titleFromPage, company: companyFromPage, location };
+          // Connection count — look for "N connections work here" or "N connection works here"
+          const connMatch = document.body.innerText.match(/(\d+)\s+connections?\s+work/i);
+          const connectionCount: number | null = connMatch ? parseInt(connMatch[1], 10) : null;
+
+          // Recruiter / hirer card
+          const hirerCard = document.querySelector(".hirer-card__hirer-information")
+            || document.querySelector("[data-test-id='job-poster']")
+            || null;
+          let recruiterName: string | null = null;
+          let recruiterTitle: string | null = null;
+          let recruiterUrl: string | null = null;
+          if (hirerCard) {
+            recruiterName = hirerCard.querySelector("a")?.textContent?.trim()
+              || hirerCard.querySelector("strong")?.textContent?.trim()
+              || null;
+            recruiterTitle = hirerCard.querySelector(".hirer-card__hirer-job-title")?.textContent?.trim()
+              || hirerCard.querySelector(".jobs-poster__title")?.textContent?.trim()
+              || null;
+            const profileAnchor = hirerCard.querySelector("a[href*='/in/']") as HTMLAnchorElement | null;
+            recruiterUrl = profileAnchor?.href ?? null;
+          }
+          if (!recruiterName) {
+            const posterEl = document.querySelector(".jobs-poster__name");
+            if (posterEl) {
+              recruiterName = posterEl.querySelector("a")?.textContent?.trim()
+                || posterEl.textContent?.trim()
+                || null;
+              const posterAnchor = posterEl.querySelector("a[href*='/in/']") as HTMLAnchorElement | null;
+              if (posterAnchor) recruiterUrl = posterAnchor.href;
+            }
+          }
+
+          return { title: titleFromPage, company: companyFromPage, location, connectionCount, recruiterName, recruiterTitle, recruiterUrl };
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("page.evaluate timed out after 15s")), 15000))
-      ]) as { title: string | null; company: string | null; location: string | null };
+      ]) as { title: string | null; company: string | null; location: string | null; connectionCount: number | null; recruiterName: string | null; recruiterTitle: string | null; recruiterUrl: string | null };
 
       await page.close();
 
@@ -212,6 +244,7 @@ async function main() {
       if (details.title) updateFields.title = details.title;
       if (company_id) updateFields.company_id = company_id;
       if (details.location) updateFields.location = details.location;
+      if (details.connectionCount != null) updateFields.connection_count = details.connectionCount;
 
       if (Object.keys(updateFields).length > 0) {
         const { error: updateErr } = await supabase
@@ -242,6 +275,58 @@ async function main() {
 
       console.log(`Enriched: ${details.title ?? "?"} at ${details.company ?? "?"} — ${posting.url}`);
       enrichedCount++;
+
+      // Create recruiter contact and link to posting if found
+      if (details.recruiterName && company_id) {
+        const { data: existingContact, error: contactLookupErr } = await supabase
+          .from("job_contacts")
+          .select("id")
+          .ilike("name", details.recruiterName)
+          .eq("company_id", company_id)
+          .maybeSingle();
+        if (contactLookupErr) {
+          console.warn(`Recruiter contact lookup failed for "${details.recruiterName}": ${contactLookupErr.message}`);
+        }
+        let contactId: string | null = existingContact?.id ?? null;
+        if (!existingContact) {
+          const { data: newContact, error: contactInsertErr } = await supabase
+            .from("job_contacts")
+            .insert({
+              name: details.recruiterName,
+              company_id,
+              title: details.recruiterTitle ?? null,
+              linkedin_url: details.recruiterUrl ?? null,
+              role_in_process: "recruiter",
+            })
+            .select("id")
+            .single();
+          if (contactInsertErr) {
+            console.warn(`Recruiter contact insert failed for "${details.recruiterName}": ${contactInsertErr.message}`);
+          } else {
+            contactId = newContact?.id ?? null;
+            const { error: contactAttrErr } = await supabase
+              .from("attribution_log")
+              .insert({
+                entity_type: "job_contact",
+                entity_id: contactId,
+                action: "created",
+                actor: "enrichment-cron",
+                reason: `Scraped recruiter from LinkedIn job posting ${posting.id}`,
+              });
+            if (contactAttrErr) {
+              console.warn(`Attribution log failed for new contact ${contactId}: ${contactAttrErr.message}`);
+            }
+          }
+        }
+        if (contactId) {
+          const { error: linkErr } = await supabase
+            .from("posting_contacts")
+            .insert({ posting_id: posting.id, contact_id: contactId, relationship: "recruiter" });
+          if (linkErr && linkErr.code !== "23505") {
+            console.warn(`posting_contacts insert failed for posting ${posting.id} / contact ${contactId}: ${linkErr.message}`);
+          }
+        }
+      }
 
       // Random delay between requests
       const delay = DELAY_MIN_MS + Math.random() * (DELAY_MAX_MS - DELAY_MIN_MS);
