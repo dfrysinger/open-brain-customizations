@@ -17,6 +17,47 @@ export interface MessagePayload {
   email: { subject: string; html: string };
 }
 
+// --- Shared progress + pipeline footer for all message types ---
+
+function formatProgressSection(stats: PipelineStats): string[] {
+  const lines: string[] = [];
+
+  lines.push("*Progress today:*");
+  for (const t of stats.tracks) {
+    const pct = t.target > 0 ? Math.round((t.completedToday / t.target) * 100) : 0;
+    const bar = progressBar(t.completedToday, t.target);
+    const streakNote = t.streak >= 2 ? ` | ${t.streak}-day streak` : "";
+    lines.push(`  ${TRACK_LABELS[t.track]}: ${t.completedToday}/${t.target} (${pct}%) ${bar}${streakNote}`);
+  }
+
+  return lines;
+}
+
+function formatPipelineFooter(stats: PipelineStats): string[] {
+  const lines: string[] = [];
+
+  lines.push("");
+  lines.push(`*Pipeline:* ${stats.applicationsOut} applied, ${stats.activeInterviews} interviewing`);
+
+  if (stats.lastRejectionDaysAgo !== null) {
+    lines.push(`*Last rejection:* ${stats.lastRejectionDaysAgo} day(s) ago`);
+  }
+
+  if (stats.daysToClearBacklog !== null) {
+    lines.push(`*Backlog:* ${stats.totalDrafts} drafts. At ${stats.currentPace.toFixed(1)}/day, ${stats.daysToClearBacklog} days to clear.`);
+  }
+
+  if (stats.staleApplications.length > 0) {
+    lines.push("");
+    lines.push("*Aging alerts:*");
+    for (const a of stats.staleApplications.slice(0, 3)) {
+      lines.push(`  ${a.title} at ${a.company} — ${a.daysOld} days with no response`);
+    }
+  }
+
+  return lines;
+}
+
 // --- 12pm: Wake-up kickoff ---
 
 export function formatKickoff(stats: PipelineStats): MessagePayload {
@@ -26,11 +67,11 @@ export function formatKickoff(stats: PipelineStats): MessagePayload {
   lines.push("*Today's targets:*");
   for (const t of stats.tracks) {
     const carryNote = t.target > 5 ? ` (+${t.target - 5} deficit carryover)` : "";
-    lines.push(`• ${TRACK_LABELS[t.track]}: ${t.target}${carryNote}`);
+    lines.push(`  ${TRACK_LABELS[t.track]}: ${t.target}${carryNote}`);
   }
 
   lines.push("");
-  lines.push("*Suggested focus — top 5 per category:*");
+  lines.push("*Suggested focus, top 5 per category:*");
   const trackOrder = ["resume_creation", "resume_review", "contact_discovery", "outreach", "application_submission"];
   for (const track of trackOrder) {
     const jobs = stats.suggested.filter(j => j.track === track);
@@ -42,21 +83,12 @@ export function formatKickoff(stats: PipelineStats): MessagePayload {
   }
 
   lines.push("");
-  if (stats.applicationsOut > 0) {
-    lines.push(`*Pipeline:* ${stats.applicationsOut} applications out, ${stats.activeInterviews} active interview(s)`);
-  }
-  if (stats.daysToClearBacklog !== null) {
-    lines.push(`*Backlog:* ${stats.totalDrafts} drafts. At ${stats.currentPace.toFixed(1)}/day pace, ${stats.daysToClearBacklog} days to clear.`);
-  }
+  lines.push(...formatPipelineFooter(stats));
 
   const slack = lines.join("\n");
-  const html = slackToHtml(slack);
   return {
     slack,
-    email: {
-      subject: `Job Hunt Kickoff — ${stats.today}`,
-      html,
-    },
+    email: { subject: `Job Hunt Kickoff — ${stats.today}`, html: slackToHtml(slack) },
   };
 }
 
@@ -66,13 +98,7 @@ export function formatCheckin(stats: PipelineStats): MessagePayload {
   const lines: string[] = ["*Afternoon Check-In*"];
 
   lines.push("");
-  lines.push("*Progress today:*");
-  for (const t of stats.tracks) {
-    const pct = t.target > 0 ? Math.round((t.completedToday / t.target) * 100) : 0;
-    const bar = progressBar(t.completedToday, t.target);
-    const streakNote = t.streak >= 2 ? ` — ${t.streak}-day streak` : "";
-    lines.push(`• ${TRACK_LABELS[t.track]}: ${t.completedToday}/${t.target} (${pct}%) ${bar}${streakNote}`);
-  }
+  lines.push(...formatProgressSection(stats));
 
   const untouched = stats.tracks.filter(t => t.completedToday === 0);
   if (untouched.length > 0) {
@@ -80,22 +106,12 @@ export function formatCheckin(stats: PipelineStats): MessagePayload {
     lines.push(`*Not started yet:* ${untouched.map(t => TRACK_LABELS[t.track]).join(", ")}`);
   }
 
-  if (stats.staleApplications.length > 0) {
-    lines.push("");
-    lines.push("*Aging alerts:*");
-    for (const a of stats.staleApplications.slice(0, 3)) {
-      lines.push(`• ${a.title} at ${a.company} — ${a.daysOld} days with no response`);
-    }
-  }
+  lines.push(...formatPipelineFooter(stats));
 
   const slack = lines.join("\n");
-  const html = slackToHtml(slack);
   return {
     slack,
-    email: {
-      subject: `Job Hunt Check-In — ${stats.today}`,
-      html,
-    },
+    email: { subject: `Job Hunt Check-In — ${stats.today}`, html: slackToHtml(slack) },
   };
 }
 
@@ -121,14 +137,22 @@ export function formatWarning(stats: PipelineStats): MessagePayload {
     return `${remaining} of ${t.target} ${TRACK_LABELS[t.track].toLowerCase()}`;
   });
 
-  const slack = `*Urgency Warning — 2 hours until scorecard*\n\nYou still have: ${summaries.join(", ")}.\n\nNow is the time.`;
-  const html = slackToHtml(slack);
+  const lines: string[] = [
+    "*Urgency Warning — 2 hours until scorecard*",
+    "",
+    `You still have: ${summaries.join(", ")}.`,
+    "",
+    "Now is the time.",
+  ];
+
+  lines.push("");
+  lines.push(...formatProgressSection(stats));
+  lines.push(...formatPipelineFooter(stats));
+
+  const slack = lines.join("\n");
   return {
     slack,
-    email: {
-      subject: `Job Hunt Warning — ${stats.today}`,
-      html,
-    },
+    email: { subject: `Job Hunt Warning — ${stats.today}`, html: slackToHtml(slack) },
   };
 }
 
@@ -143,42 +167,21 @@ export function formatScorecard(stats: PipelineStats): MessagePayload {
     const hit = t.completedToday >= t.target ? "DONE" : `${t.deficit} short`;
     const streakNote = t.streak >= 2 ? ` | ${t.streak}-day streak` : "";
     const trendNote = trendLabel(t.weeklyAvg, t.lastWeekAvg);
-    lines.push(`• ${TRACK_LABELS[t.track]}: ${t.completedToday}/${t.target} (${hit})${streakNote}${trendNote}`);
+    lines.push(`  ${TRACK_LABELS[t.track]}: ${t.completedToday}/${t.target} (${hit})${streakNote}${trendNote}`);
   }
 
   lines.push("");
   lines.push("*Weekly averages (last 7 days):*");
   for (const t of stats.tracks) {
-    lines.push(`• ${TRACK_LABELS[t.track]}: ${t.weeklyAvg.toFixed(1)}/day`);
+    lines.push(`  ${TRACK_LABELS[t.track]}: ${t.weeklyAvg.toFixed(1)}/day`);
   }
 
-  lines.push("");
-  lines.push(`*Pipeline:* ${stats.applicationsOut} out, ${stats.activeInterviews} active interview(s)`);
-  if (stats.lastRejectionDaysAgo !== null) {
-    lines.push(`*Last rejection:* ${stats.lastRejectionDaysAgo} day(s) ago`);
-  }
-
-  if (stats.staleApplications.length > 0) {
-    lines.push("");
-    lines.push("*Stale applications (14+ days, no response):*");
-    for (const a of stats.staleApplications) {
-      lines.push(`• ${a.title} at ${a.company} — ${a.daysOld} days`);
-    }
-  }
-
-  if (stats.daysToClearBacklog !== null) {
-    lines.push("");
-    lines.push(`*Backlog:* ${stats.totalDrafts} drafts. At ${stats.currentPace.toFixed(1)}/day, ${stats.daysToClearBacklog} days to clear.`);
-  }
+  lines.push(...formatPipelineFooter(stats));
 
   const slack = lines.join("\n");
-  const html = slackToHtml(slack);
   return {
     slack,
-    email: {
-      subject: `Job Hunt Scorecard — ${stats.today}`,
-      html,
-    },
+    email: { subject: `Job Hunt Scorecard — ${stats.today}`, html: slackToHtml(slack) },
   };
 }
 
@@ -198,7 +201,6 @@ function trendLabel(current: number, previous: number): string {
 }
 
 function slackToHtml(text: string): string {
-  // Convert Slack markdown to basic HTML for email
   let html = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
